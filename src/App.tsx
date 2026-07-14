@@ -334,16 +334,6 @@ function SkillLibrary({
   }, [instances]);
 
   useEffect(() => {
-    if (visibleInstanceCount >= instances.length) return;
-    const timer = window.setTimeout(() => {
-      setVisibleInstanceCount((current) =>
-        Math.min(current + LIST_RENDER_BATCH, instances.length),
-      );
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [instances.length, visibleInstanceCount]);
-
-  useEffect(() => {
     let active = true;
     gateway
       .loadViewPreferences()
@@ -974,25 +964,39 @@ function SkillLibrary({
               <span>状态</span>
             </div>
             {instances.length ? (
-              <ul className="skill-list" aria-label="本地 Skill">
-                {instances.slice(0, visibleInstanceCount).map((skill) => (
-                  <SkillRow
-                    key={skill.id}
-                    skill={skill}
-                    root={rootsById.get(skill.rootId)}
-                    selected={skill.id === selectedInstanceId}
-                    checked={selectedOrganizationIds.includes(skill.id)}
-                    onSelect={() => setSelectedInstanceId(skill.id)}
-                    onToggleChecked={() =>
-                      setSelectedOrganizationIds((current) =>
-                        current.includes(skill.id)
-                          ? current.filter((id) => id !== skill.id)
-                          : [...current, skill.id],
+              <>
+                <ul className="skill-list" aria-label="本地 Skill">
+                  {instances.slice(0, visibleInstanceCount).map((skill) => (
+                    <SkillRow
+                      key={skill.id}
+                      skill={skill}
+                      root={rootsById.get(skill.rootId)}
+                      selected={skill.id === selectedInstanceId}
+                      checked={selectedOrganizationIds.includes(skill.id)}
+                      onSelect={() => setSelectedInstanceId(skill.id)}
+                      onToggleChecked={() =>
+                        setSelectedOrganizationIds((current) =>
+                          current.includes(skill.id)
+                            ? current.filter((id) => id !== skill.id)
+                            : [...current, skill.id],
+                        )
+                      }
+                    />
+                  ))}
+                </ul>
+                {visibleInstanceCount < instances.length ? (
+                  <button
+                    className="load-more-skills"
+                    onClick={() =>
+                      setVisibleInstanceCount((current) =>
+                        Math.min(current + LIST_RENDER_BATCH, instances.length),
                       )
                     }
-                  />
-                ))}
-              </ul>
+                  >
+                    显示更多 Skill · 已显示 {visibleInstanceCount} / {instances.length}
+                  </button>
+                ) : null}
+              </>
             ) : (
               <div className="no-results">
                 <strong>没有匹配的 Skill</strong>

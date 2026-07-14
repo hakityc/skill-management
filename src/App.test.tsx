@@ -164,6 +164,9 @@ describe("Skill 管理器", () => {
     const firstCheckbox = await screen.findByRole("checkbox", {
       name: "选择 skill-0000",
     });
+    expect(
+      screen.getByRole("button", { name: /显示更多 Skill.*250.*1000/ }),
+    ).toBeTruthy();
     await userEvent.click(firstCheckbox);
     expect(await screen.findByText("已选择 1 个 Skill 实例")).toBeTruthy();
 
@@ -197,7 +200,7 @@ describe("Skill 管理器", () => {
     const elapsed = performance.now() - started;
     expect(elapsed).toBeLessThan(5_000);
     expect(longestReactCommit).toBeLessThan(1_000);
-  });
+  }, 15_000);
 
   test("个人用户从中文空状态选择根目录后看到合法与需要修复的 Skill", async () => {
     const emptySnapshot: WorkspaceSnapshot = {

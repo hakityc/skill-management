@@ -70,6 +70,8 @@ button { font: inherit; }
 .table-header, .skill-row { display: grid; grid-template-columns: minmax(260px, 1.4fr) minmax(160px, .8fr) 100px; align-items: center; }
 .table-header { min-height: 35px; padding: 0 16px; background: #f6f8f5; color: #7d8881; font-size: 9px; font-weight: 800; text-transform: uppercase; }
 .skill-list { margin: 0; padding: 0; list-style: none; }
+.load-more-skills { width: 100%; min-height: 38px; border: 0; border-top: 1px solid #dce2dc; background: #f8faf7; color: #217c5d; font-size: 10px; font-weight: 800; }
+.load-more-skills:hover { background: #eef7f2; }
 .skill-row { position: relative; min-height: 67px; padding: 10px 16px 10px 40px; border-top: 1px solid #e2e7e2; }
 .table-shell.compact .skill-row { min-height: 57px; padding-top: 7px; padding-bottom: 7px; }
 .table-shell.comfortable .skill-row { min-height: 78px; padding-top: 14px; padding-bottom: 14px; }
