@@ -193,12 +193,12 @@ export interface SkillChangeRecord {
   createdAt: number;
 }
 
-export type FileOperationKind = "import" | "copy" | "move" | "trash";
+export type FileOperationKind = "import" | "copy" | "move" | "trash" | "merge";
 export type FileConflictPolicy = "skip" | "overwrite";
 
 export interface FileOperationRequest {
   instanceIds: string[];
-  kind: Exclude<FileOperationKind, "import">;
+  kind: Exclude<FileOperationKind, "import" | "merge">;
   targetRootId: number | null;
   conflictPolicy: FileConflictPolicy;
 }
@@ -219,6 +219,7 @@ export interface PlannedFileOperationItem {
   willRemoveSource: boolean;
   fileCount: number;
   totalSize: number;
+  changes?: DuplicateFileDifference[];
 }
 
 export interface FileOperationPlan {
@@ -268,6 +269,7 @@ export type DuplicateFileDifferenceStatus =
   | "onlyRight";
 
 export type DuplicateFileKind = "text" | "binary";
+export type DuplicateFileNodeKind = "file" | "symbolicLink";
 export type DuplicateTextDiffLineKind = "equal" | "modified" | "onlyLeft" | "onlyRight";
 export type DuplicateDecisionKind = "notDuplicate" | "ignored";
 
@@ -283,6 +285,8 @@ export interface DuplicateFileDifference {
   relativePath: string;
   status: DuplicateFileDifferenceStatus;
   kind: DuplicateFileKind;
+  leftNodeKind?: DuplicateFileNodeKind | null;
+  rightNodeKind?: DuplicateFileNodeKind | null;
   leftSize: number | null;
   rightSize: number | null;
   leftFingerprint: string | null;

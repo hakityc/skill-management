@@ -10,8 +10,8 @@ pub use detail::{SkillDetail, SkillFileEntry, SkillFileKind, SkillFilePreview};
 pub use duplicate::{
     DUPLICATE_SIMILARITY_THRESHOLD, DuplicateComparison, DuplicateDecisionKind,
     DuplicateDecisionRecord, DuplicateFileDifference, DuplicateFileDifferenceStatus,
-    DuplicateFileKind, DuplicateGroup, DuplicateHitRule, DuplicateReview, DuplicateReviewInstance,
-    DuplicateTextDiffLine, DuplicateTextDiffLineKind,
+    DuplicateFileKind, DuplicateFileNodeKind, DuplicateGroup, DuplicateHitRule, DuplicateReview,
+    DuplicateReviewInstance, DuplicateTextDiffLine, DuplicateTextDiffLineKind,
 };
 pub use edit::{
     SkillChangeKind, SkillChangeOutcome, SkillChangePlan, SkillChangeRecord, SkillDraft,

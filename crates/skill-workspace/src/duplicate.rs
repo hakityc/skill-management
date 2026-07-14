@@ -71,6 +71,8 @@ pub struct DuplicateFileDifference {
     pub relative_path: String,
     pub status: DuplicateFileDifferenceStatus,
     pub kind: DuplicateFileKind,
+    pub left_node_kind: Option<DuplicateFileNodeKind>,
+    pub right_node_kind: Option<DuplicateFileNodeKind>,
     pub left_size: Option<u64>,
     pub right_size: Option<u64>,
     pub left_fingerprint: Option<String>,
@@ -93,6 +95,13 @@ pub enum DuplicateFileDifferenceStatus {
 pub enum DuplicateFileKind {
     Text,
     Binary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DuplicateFileNodeKind {
+    File,
+    SymbolicLink,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +143,7 @@ pub struct DuplicateDecisionRecord {
 struct EffectiveFile {
     bytes: Vec<u8>,
     kind: DuplicateFileKind,
+    node_kind: DuplicateFileNodeKind,
 }
 
 struct InstanceContent {
@@ -337,7 +347,7 @@ impl SkillWorkspace {
 fn read_instance_content(instance: &SkillInstance) -> Result<InstanceContent, WorkspaceError> {
     let base = Path::new(&instance.real_path);
     let mut files = BTreeMap::new();
-    collect_effective_files(base, base, &mut files)?;
+    collect_files(base, base, &mut files, false)?;
     let similarity_bigrams = bigram_counts(&similarity_document(&files));
     let similarity_bigram_count = similarity_bigrams.values().sum();
     Ok(InstanceContent {
@@ -348,10 +358,11 @@ fn read_instance_content(instance: &SkillInstance) -> Result<InstanceContent, Wo
     })
 }
 
-fn collect_effective_files(
+fn collect_files(
     base: &Path,
     directory: &Path,
     files: &mut BTreeMap<String, EffectiveFile>,
+    include_ignored: bool,
 ) -> Result<(), WorkspaceError> {
     let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
@@ -360,12 +371,12 @@ fn collect_effective_files(
         let name = entry.file_name();
         let metadata = path.symlink_metadata()?;
         if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            if !is_ignored_directory(&name) {
-                collect_effective_files(base, &path, files)?;
+            if include_ignored || !is_ignored_directory(&name) {
+                collect_files(base, &path, files, include_ignored)?;
             }
             continue;
         }
-        if is_ignored_file(&name) {
+        if !include_ignored && is_ignored_file(&name) {
             continue;
         }
         let relative_path = path
@@ -375,7 +386,8 @@ fn collect_effective_files(
             .map(|component| component.as_os_str().to_string_lossy())
             .collect::<Vec<_>>()
             .join("/");
-        let bytes = if metadata.file_type().is_symlink() {
+        let is_symbolic_link = metadata.file_type().is_symlink();
+        let bytes = if is_symbolic_link {
             fs::read_link(&path)?
                 .to_string_lossy()
                 .into_owned()
@@ -388,9 +400,31 @@ fn collect_effective_files(
         } else {
             DuplicateFileKind::Binary
         };
-        files.insert(relative_path, EffectiveFile { bytes, kind });
+        files.insert(
+            relative_path,
+            EffectiveFile {
+                bytes,
+                kind,
+                node_kind: if is_symbolic_link {
+                    DuplicateFileNodeKind::SymbolicLink
+                } else {
+                    DuplicateFileNodeKind::File
+                },
+            },
+        );
     }
     Ok(())
+}
+
+pub(crate) fn compare_directory_trees_for_merge(
+    left: &Path,
+    right: &Path,
+) -> Result<Vec<DuplicateFileDifference>, WorkspaceError> {
+    let mut left_files = BTreeMap::new();
+    let mut right_files = BTreeMap::new();
+    collect_files(left, left, &mut left_files, true)?;
+    collect_files(right, right, &mut right_files, true)?;
+    Ok(compare_files(&left_files, &right_files))
 }
 
 fn is_ignored_file(name: &std::ffi::OsStr) -> bool {
@@ -553,6 +587,8 @@ fn compare_files(
                 relative_path,
                 status,
                 kind,
+                left_node_kind: left_file.map(|file| file.node_kind.clone()),
+                right_node_kind: right_file.map(|file| file.node_kind.clone()),
                 left_size: left_file.map(|file| file.bytes.len() as u64),
                 right_size: right_file.map(|file| file.bytes.len() as u64),
                 left_fingerprint: left_file.map(|file| stable_fingerprint(&file.bytes)),

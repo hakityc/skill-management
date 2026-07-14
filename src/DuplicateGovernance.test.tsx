@@ -36,6 +36,11 @@ describe("重复检查中心", () => {
     let groups = [suspected, exact, conflict];
     let savedDecision: { ids: string[]; kind: DuplicateDecisionKind } | null = null;
     let restoredDecisionId: number | null = null;
+    let plannedMerge: { master: string; targets: string[] } | null = null;
+    let mergeExecuted = false;
+    let mergeUndone = false;
+    let mergePreviewCount = 0;
+    const cancelledMergePlans: number[] = [];
     const review = (): DuplicateReview => ({ groups, suppressedCount: savedDecision ? 1 : 0 });
     const gateway: SkillGateway = {
       loadSnapshot: async () => snapshot,
@@ -67,6 +72,29 @@ describe("重复检查中心", () => {
       async restoreDuplicateDecision(decisionId) {
         restoredDecisionId = decisionId;
       },
+      async planDuplicateMerge(master, targets) {
+        mergePreviewCount += 1;
+        plannedMerge = { master, targets };
+        if (mergePreviewCount === 2) throw new Error("新的归并预览失败");
+        return {
+          id: 91,
+          kind: "merge",
+          undoable: true,
+          items: [
+            {
+              instanceId: "left-suspected",
+              source: "/Users/me/.claude/skills/release-notes",
+              target: "/Users/me/.codex/skills/release-notes",
+              conflict: true,
+              willOverwrite: true,
+              willRemoveSource: false,
+              fileCount: 2,
+              totalSize: 248,
+              changes: suspected.comparisons[0].files,
+            },
+          ],
+        };
+      },
       skillOrganization: async () => ({ groups: [], instances: [] }),
       createSkillGroup: async () => ({ groups: [], instances: [] }),
       renameSkillGroup: async () => ({ groups: [], instances: [] }),
@@ -76,11 +104,51 @@ describe("重复检查中心", () => {
       chooseZipFile: async () => null,
       planFileOperations: async () => ({ id: 1, kind: "copy", items: [], undoable: true }),
       previewZipImport: async () => ({ id: 1, kind: "import", items: [], undoable: true }),
-      executeFileOperationPlan: async () => ({ batchId: 1, results: [], snapshot }),
-      cancelFileOperationPlan: async () => {},
-      fileOperationHistory: async () => [],
+      async executeFileOperationPlan() {
+        mergeExecuted = true;
+        return {
+          batchId: 55,
+          results: [
+            {
+              instanceId: "left-suspected",
+              source: "/Users/me/.claude/skills/release-notes",
+              target: "/Users/me/.codex/skills/release-notes",
+              status: "success",
+              message: "归并完成；目标已采用主实例目录内容。",
+              backupCreated: true,
+            },
+          ],
+          snapshot,
+        };
+      },
+      async cancelFileOperationPlan(planId) {
+        cancelledMergePlans.push(planId);
+      },
+      fileOperationHistory: async () =>
+        mergeExecuted
+          ? [
+              {
+                batchId: 55,
+                planId: 91,
+                kind: "merge",
+                createdAt: 10,
+                undoable: true,
+                undone: mergeUndone,
+                plan: {
+                  id: 91,
+                  kind: "merge",
+                  undoable: true,
+                  items: [],
+                },
+                results: [],
+              },
+            ]
+          : [],
       latestUndoableFileOperation: async () => null,
-      undoFileOperationBatch: async () => snapshot,
+      async undoFileOperationBatch() {
+        mergeUndone = true;
+        return snapshot;
+      },
     };
 
     render(
@@ -94,8 +162,8 @@ describe("重复检查中心", () => {
     expect(screen.getByRole("button", { name: /同名冲突.*1/ })).toBeTruthy();
     expect(screen.getByText("内容相似度 ≥ 82%")).toBeTruthy();
     expect(screen.getByText("规范化名称匹配")).toBeTruthy();
-    expect(screen.getByText("/Users/me/.codex/skills/release-notes")).toBeTruthy();
-    expect(screen.getByText("/Users/me/.claude/skills/release-notes")).toBeTruthy();
+    expect(screen.getAllByText("/Users/me/.codex/skills/release-notes").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("/Users/me/.claude/skills/release-notes").length).toBeGreaterThan(0);
     expect(screen.getByText("## 修复与升级")).toBeTruthy();
     const comparisonPicker = screen.getByRole("combobox", { name: "比较实例组合" });
     expect(comparisonPicker).toBeTruthy();
@@ -106,6 +174,28 @@ describe("重复检查中心", () => {
     await userEvent.click(screen.getByRole("button", { name: /preview\.png/ }));
     expect(screen.getByText("111")).toBeTruthy();
     expect(screen.getByText("222")).toBeTruthy();
+
+    await userEvent.click(
+      screen.getByRole("radio", { name: "主实例 Claude · release-notes" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "预览安全归并" }));
+    expect(plannedMerge).toEqual({
+      master: "right-suspected",
+      targets: ["left-suspected", "third-suspected"],
+    });
+    expect(await screen.findByText("确认后，目标目录将完整采用主实例内容")).toBeTruthy();
+    expect(screen.getByText("新增 0")).toBeTruthy();
+    expect(screen.getByText("覆盖 2")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "预览安全归并" }));
+    expect(await screen.findByText(/新的归并预览失败/)).toBeTruthy();
+    expect(cancelledMergePlans).toEqual([91]);
+    expect(screen.queryByRole("button", { name: "确认归并 1 个目标" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "预览安全归并" }));
+    await userEvent.click(screen.getByRole("button", { name: "确认归并 1 个目标" }));
+    expect(mergeExecuted).toBe(true);
+    expect(await screen.findByText("归并完成；目标已采用主实例目录内容。")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "撤销归并 #55" }));
+    expect(mergeUndone).toBe(true);
 
     await userEvent.click(screen.getByRole("button", { name: "不是重复" }));
     expect(savedDecision).toEqual({

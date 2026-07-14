@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 use zip::ZipArchive;
 
 use crate::{
-    SkillInstance, SkillWorkspace, WorkspaceError, WorkspaceSnapshot,
+    DuplicateFileDifference, DuplicateFileDifferenceStatus, SkillInstance, SkillWorkspace,
+    WorkspaceError, WorkspaceSnapshot,
     detail::safe_relative_path,
+    duplicate::compare_directory_trees_for_merge,
     edit::{
         atomic_replace_directory, copy_directory, directory_fingerprint, remove_path_if_exists,
         sibling_work_path,
@@ -31,6 +33,7 @@ pub enum FileOperationKind {
     Copy,
     Move,
     Trash,
+    Merge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +81,8 @@ pub struct PlannedFileOperationItem {
     pub will_remove_source: bool,
     pub file_count: usize,
     pub total_size: u64,
+    #[serde(default)]
+    pub changes: Vec<DuplicateFileDifference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +155,8 @@ struct PendingFileOperationItem {
     conflict: bool,
     file_count: usize,
     total_size: u64,
+    #[serde(default)]
+    changes: Vec<DuplicateFileDifference>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -186,9 +193,12 @@ impl SkillWorkspace {
         &self,
         request: &FileOperationRequest,
     ) -> Result<FileOperationPlan, WorkspaceError> {
-        if matches!(request.kind, FileOperationKind::Import) {
+        if matches!(
+            request.kind,
+            FileOperationKind::Import | FileOperationKind::Merge
+        ) {
             return Err(WorkspaceError::InvalidFileOperation(
-                "ZIP 导入必须通过 ZIP 预览创建计划。".to_owned(),
+                "ZIP 导入或重复归并必须通过对应的专用预览创建计划。".to_owned(),
             ));
         }
         if request.instance_ids.is_empty() {
@@ -286,6 +296,7 @@ impl SkillWorkspace {
                 conflict: target.as_ref().is_some_and(|path| path_entry_exists(path)),
                 file_count,
                 total_size,
+                changes: Vec::new(),
             });
         }
         store_plan(
@@ -293,6 +304,97 @@ impl SkillWorkspace {
             PendingFileOperationPlan {
                 kind: request.kind.clone(),
                 conflict_policy: request.conflict_policy.clone(),
+                items,
+                staging_root: None,
+            },
+        )
+    }
+
+    pub fn plan_duplicate_merge(
+        &self,
+        master_instance_id: &str,
+        target_instance_ids: &[String],
+    ) -> Result<FileOperationPlan, WorkspaceError> {
+        if target_instance_ids.is_empty() {
+            return Err(WorkspaceError::InvalidFileOperation(
+                "至少选择一个归并目标实例。".to_owned(),
+            ));
+        }
+        let snapshot = self.snapshot()?;
+        let master = snapshot
+            .instances
+            .iter()
+            .find(|instance| instance.id == master_instance_id)
+            .ok_or_else(|| WorkspaceError::UnknownInstance(master_instance_id.to_owned()))?;
+        let master_root = snapshot
+            .roots
+            .iter()
+            .find(|root| root.id == master.root_id)
+            .ok_or_else(|| WorkspaceError::InvalidRoot("找不到主实例根目录。".to_owned()))?;
+        let source = operation_source_path(
+            master,
+            &FileOperationKind::Merge,
+            Path::new(&master_root.path),
+        )?;
+        let source_fingerprint = operation_path_fingerprint(&source)?;
+        let (file_count, total_size) = directory_impact(&source)?;
+        let mut seen = HashSet::new();
+        let mut items = Vec::new();
+        for target_instance_id in target_instance_ids {
+            if target_instance_id == master_instance_id {
+                return Err(WorkspaceError::InvalidFileOperation(
+                    "主实例不能同时作为归并目标。".to_owned(),
+                ));
+            }
+            if !seen.insert(target_instance_id) {
+                continue;
+            }
+            let target_instance = snapshot
+                .instances
+                .iter()
+                .find(|instance| instance.id == *target_instance_id)
+                .ok_or_else(|| WorkspaceError::UnknownInstance(target_instance_id.clone()))?;
+            let target_root = snapshot
+                .roots
+                .iter()
+                .find(|root| root.id == target_instance.root_id)
+                .ok_or_else(|| WorkspaceError::InvalidRoot("找不到目标实例根目录。".to_owned()))?;
+            let target = PathBuf::from(&target_root.path)
+                .join(safe_relative_path(&target_instance.relative_path)?);
+            validate_target_ancestors(Path::new(&target_root.path), &target)?;
+            if source == target {
+                return Err(WorkspaceError::InvalidFileOperation(
+                    "主实例与归并目标不能指向同一路径。".to_owned(),
+                ));
+            }
+            let changes = compare_directory_trees_for_merge(&source, &target)?
+                .into_iter()
+                .filter(|change| change.status != DuplicateFileDifferenceStatus::Identical)
+                .collect();
+            items.push(PendingFileOperationItem {
+                // 归并结果按目标逐项展示，因此这里记录目标实例。
+                instance_id: Some(target_instance.id.clone()),
+                source_root_id: Some(master.root_id),
+                source_root: Some(master_root.path.clone()),
+                source_relative_path: Some(master.relative_path.clone()),
+                target_root_id: Some(target_instance.root_id),
+                target_root: Some(target_root.path.clone()),
+                target_relative_path: Some(target_instance.relative_path.clone()),
+                source: source.to_string_lossy().into_owned(),
+                target: Some(target.to_string_lossy().into_owned()),
+                source_fingerprint,
+                target_fingerprint: Some(operation_path_fingerprint(&target)?),
+                conflict: true,
+                file_count,
+                total_size,
+                changes,
+            });
+        }
+        store_plan(
+            &self.database_path,
+            PendingFileOperationPlan {
+                kind: FileOperationKind::Merge,
+                conflict_policy: FileConflictPolicy::Overwrite,
                 items,
                 staging_root: None,
             },
@@ -342,6 +444,7 @@ impl SkillWorkspace {
                 conflict: path_entry_exists(&target),
                 file_count,
                 total_size,
+                changes: Vec::new(),
             }],
             staging_root: Some(staging_root.to_string_lossy().into_owned()),
         };
@@ -436,6 +539,8 @@ impl SkillWorkspace {
                         FileOperationResultStatus::Success,
                         if pending.kind == FileOperationKind::Trash {
                             "已移入系统废纸篓；可在访达的废纸篓中恢复。"
+                        } else if pending.kind == FileOperationKind::Merge {
+                            "归并完成；目标已采用主实例目录内容。"
                         } else {
                             "操作完成。"
                         },
@@ -1009,6 +1114,7 @@ fn public_plan(id: i64, pending: &PendingFileOperationPlan) -> FileOperationPlan
                 ),
                 file_count: item.file_count,
                 total_size: item.total_size,
+                changes: item.changes.clone(),
             })
             .collect(),
     }
@@ -1721,6 +1827,7 @@ fn operation_kind_database(kind: &FileOperationKind) -> &'static str {
         FileOperationKind::Copy => "copy",
         FileOperationKind::Move => "move",
         FileOperationKind::Trash => "trash",
+        FileOperationKind::Merge => "merge",
     }
 }
 
@@ -1729,6 +1836,7 @@ fn operation_kind_from_database(value: &str) -> FileOperationKind {
         "import" => FileOperationKind::Import,
         "move" => FileOperationKind::Move,
         "trash" => FileOperationKind::Trash,
+        "merge" => FileOperationKind::Merge,
         _ => FileOperationKind::Copy,
     }
 }

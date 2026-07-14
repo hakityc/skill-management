@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SkillGateway } from "./App";
 import type {
@@ -11,6 +11,9 @@ import type {
   DuplicateHitRule,
   DuplicateReview,
   DuplicateReviewInstance,
+  FileOperationItemResult,
+  FileOperationPlan,
+  FileOperationRecord,
   SkillClient,
   WorkspaceSnapshot,
 } from "./models";
@@ -40,6 +43,18 @@ export function DuplicateGovernance({
   const [error, setError] = useState<string | null>(null);
   const [showDecisions, setShowDecisions] = useState(false);
   const [decisions, setDecisions] = useState<DuplicateDecisionRecord[]>([]);
+  const [mergeMasterId, setMergeMasterId] = useState<string | null>(null);
+  const [mergeTargetIds, setMergeTargetIds] = useState<string[]>([]);
+  const [mergePlan, setMergePlan] = useState<FileOperationPlan | null>(null);
+  const [mergeResults, setMergeResults] = useState<FileOperationItemResult[] | null>(null);
+  const [mergeHistory, setMergeHistory] = useState<FileOperationRecord[]>([]);
+  const mergePlanRef = useRef<FileOperationPlan | null>(null);
+  const mergeRequestRevision = useRef(0);
+
+  function storeMergePlan(next: FileOperationPlan | null) {
+    mergePlanRef.current = next;
+    setMergePlan(next);
+  }
 
   const loadReview = useCallback(async () => {
     setError(null);
@@ -61,7 +76,19 @@ export function DuplicateGovernance({
 
   useEffect(() => {
     void loadReview();
+    void gateway.fileOperationHistory().then((records) =>
+      setMergeHistory(records.filter((record) => record.kind === "merge")),
+    );
   }, [loadReview]);
+
+  useEffect(
+    () => () => {
+      mergeRequestRevision.current += 1;
+      const obsolete = mergePlanRef.current;
+      if (obsolete) void gateway.cancelFileOperationPlan(obsolete.id).catch(() => {});
+    },
+    [gateway],
+  );
 
   const filteredGroups = useMemo(() => {
     const search = query.trim().toLocaleLowerCase("zh-CN");
@@ -87,9 +114,100 @@ export function DuplicateGovernance({
     null;
 
   useEffect(() => {
+    mergeRequestRevision.current += 1;
+    const obsolete = mergePlanRef.current;
+    if (obsolete) void gateway.cancelFileOperationPlan(obsolete.id).catch(() => {});
     setSelectedComparisonIndex(0);
     setSelectedFilePath(null);
+    const instances = selectedGroup?.instances ?? [];
+    setMergeMasterId(instances[0]?.id ?? null);
+    setMergeTargetIds(instances.slice(1).map((instance) => instance.id));
+    storeMergePlan(null);
+    setMergeResults(null);
   }, [selectedGroup?.id]);
+
+  function discardMergePlan() {
+    mergeRequestRevision.current += 1;
+    const obsolete = mergePlanRef.current;
+    storeMergePlan(null);
+    setMergeResults(null);
+    if (obsolete) void gateway.cancelFileOperationPlan(obsolete.id).catch(() => {});
+  }
+
+  function chooseMergeMaster(instanceId: string) {
+    discardMergePlan();
+    setMergeMasterId(instanceId);
+    setMergeTargetIds(selectedGroup?.instances.filter((item) => item.id !== instanceId).map((item) => item.id) ?? []);
+  }
+
+  function toggleMergeTarget(instanceId: string) {
+    discardMergePlan();
+    setMergeTargetIds((current) =>
+      current.includes(instanceId)
+        ? current.filter((id) => id !== instanceId)
+        : [...current, instanceId],
+    );
+  }
+
+  async function previewMerge() {
+    if (!mergeMasterId || mergeTargetIds.length === 0) return;
+    setBusy(true);
+    setError(null);
+    const requestRevision = mergeRequestRevision.current + 1;
+    mergeRequestRevision.current = requestRevision;
+    try {
+      if (mergePlan && !mergeResults) {
+        storeMergePlan(null);
+        await gateway.cancelFileOperationPlan(mergePlan.id);
+      }
+      const nextPlan = await gateway.planDuplicateMerge(mergeMasterId, mergeTargetIds);
+      if (mergeRequestRevision.current !== requestRevision) {
+        await gateway.cancelFileOperationPlan(nextPlan.id).catch(() => {});
+        return;
+      }
+      storeMergePlan(nextPlan);
+      setMergeResults(null);
+    } catch (reason) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function executeMerge() {
+    if (!mergePlan) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const outcome = await gateway.executeFileOperationPlan(mergePlan.id);
+      setMergeResults(outcome.results);
+      onSnapshotChange(outcome.snapshot);
+      setMergeHistory(
+        (await gateway.fileOperationHistory()).filter((record) => record.kind === "merge"),
+      );
+    } catch (reason) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function undoMerge(batchId: number) {
+    setBusy(true);
+    setError(null);
+    try {
+      onSnapshotChange(await gateway.undoFileOperationBatch(batchId));
+      setMergeHistory(
+        (await gateway.fileOperationHistory()).filter((record) => record.kind === "merge"),
+      );
+      storeMergePlan(null);
+      setMergeResults(null);
+    } catch (reason) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function decide(kind: DuplicateDecisionKind) {
     if (!selectedGroup) return;
@@ -160,10 +278,10 @@ export function DuplicateGovernance({
       </header>
 
       <section className="duplicate-metrics" aria-label="重复检查概览">
-        <Metric label="待检查" count={review.groups.length} active={filter === "all"} onClick={() => setFilter("all")} />
-        <Metric label="完全重复" count={counts.exact} tone="exact" active={filter === "exact"} onClick={() => setFilter("exact")} />
-        <Metric label="疑似重复" count={counts.suspected} tone="suspected" active={filter === "suspected"} onClick={() => setFilter("suspected")} />
-        <Metric label="同名冲突" count={counts.nameConflict} tone="conflict" active={filter === "nameConflict"} onClick={() => setFilter("nameConflict")} />
+        <Metric label="待检查" count={review.groups.length} active={filter === "all"} disabled={busy} onClick={() => setFilter("all")} />
+        <Metric label="完全重复" count={counts.exact} tone="exact" active={filter === "exact"} disabled={busy} onClick={() => setFilter("exact")} />
+        <Metric label="疑似重复" count={counts.suspected} tone="suspected" active={filter === "suspected"} disabled={busy} onClick={() => setFilter("suspected")} />
+        <Metric label="同名冲突" count={counts.nameConflict} tone="conflict" active={filter === "nameConflict"} disabled={busy} onClick={() => setFilter("nameConflict")} />
       </section>
 
       {error ? <div className="duplicate-error" role="alert">重复检查失败：{error}</div> : null}
@@ -180,6 +298,7 @@ export function DuplicateGovernance({
               aria-label="搜索 Skill 组"
               placeholder="搜索名称、实例或路径"
               value={query}
+              disabled={busy}
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
@@ -188,6 +307,7 @@ export function DuplicateGovernance({
               <button
                 className={group.id === selectedGroup?.id ? "duplicate-queue-item active" : "duplicate-queue-item"}
                 key={group.id}
+                disabled={busy}
                 onClick={() => setSelectedGroupId(group.id)}
               >
                 <span className="queue-number">{String(index + 1).padStart(2, "0")}</span>
@@ -220,6 +340,16 @@ export function DuplicateGovernance({
             onSelectFile={setSelectedFilePath}
             onNotDuplicate={() => decide("notDuplicate")}
             onIgnore={() => decide("ignored")}
+            mergeMasterId={mergeMasterId}
+            mergeTargetIds={mergeTargetIds}
+            mergePlan={mergePlan}
+            mergeResults={mergeResults}
+            mergeHistory={mergeHistory}
+            onChooseMergeMaster={chooseMergeMaster}
+            onToggleMergeTarget={toggleMergeTarget}
+            onPreviewMerge={previewMerge}
+            onExecuteMerge={executeMerge}
+            onUndoMerge={undoMerge}
           />
         ) : (
           <section className="duplicate-stage duplicate-empty"><strong>没有可比较的 Skill 组</strong></section>
@@ -248,6 +378,16 @@ function ComparisonStage({
   onSelectFile,
   onNotDuplicate,
   onIgnore,
+  mergeMasterId,
+  mergeTargetIds,
+  mergePlan,
+  mergeResults,
+  mergeHistory,
+  onChooseMergeMaster,
+  onToggleMergeTarget,
+  onPreviewMerge,
+  onExecuteMerge,
+  onUndoMerge,
 }: {
   group: DuplicateGroup;
   comparison: DuplicateComparison;
@@ -258,6 +398,16 @@ function ComparisonStage({
   onSelectFile(path: string): void;
   onNotDuplicate(): void;
   onIgnore(): void;
+  mergeMasterId: string | null;
+  mergeTargetIds: string[];
+  mergePlan: FileOperationPlan | null;
+  mergeResults: FileOperationItemResult[] | null;
+  mergeHistory: FileOperationRecord[];
+  onChooseMergeMaster(id: string): void;
+  onToggleMergeTarget(id: string): void;
+  onPreviewMerge(): void;
+  onExecuteMerge(): void;
+  onUndoMerge(batchId: number): void;
 }) {
   const left = group.instances.find((instance) => instance.id === comparison.leftInstanceId)!;
   const right = group.instances.find((instance) => instance.id === comparison.rightInstanceId)!;
@@ -324,24 +474,179 @@ function ComparisonStage({
         </div>
         {selectedFile ? <FileDifference file={selectedFile} /> : null}
       </section>
+      <MergePanel
+        group={group}
+        masterId={mergeMasterId}
+        targetIds={mergeTargetIds}
+        plan={mergePlan}
+        results={mergeResults}
+        history={mergeHistory}
+        busy={busy}
+        onChooseMaster={onChooseMergeMaster}
+        onToggleTarget={onToggleMergeTarget}
+        onPreview={onPreviewMerge}
+        onExecute={onExecuteMerge}
+        onUndo={onUndoMerge}
+      />
+    </section>
+  );
+}
+
+function MergePanel({
+  group,
+  masterId,
+  targetIds,
+  plan,
+  results,
+  history,
+  busy,
+  onChooseMaster,
+  onToggleTarget,
+  onPreview,
+  onExecute,
+  onUndo,
+}: {
+  group: DuplicateGroup;
+  masterId: string | null;
+  targetIds: string[];
+  plan: FileOperationPlan | null;
+  results: FileOperationItemResult[] | null;
+  history: FileOperationRecord[];
+  busy: boolean;
+  onChooseMaster(id: string): void;
+  onToggleTarget(id: string): void;
+  onPreview(): void;
+  onExecute(): void;
+  onUndo(batchId: number): void;
+}) {
+  return (
+    <section className="merge-panel" aria-label="安全归并">
+      <header>
+        <div><span>一次性操作</span><h3>安全归并相关 Skill 实例</h3></div>
+        <p>选择一个主实例，将其完整目录镜像到目标；不会拼接或生成 SKILL.md，也不会建立永久同步。</p>
+      </header>
+      <div className="merge-selection">
+        <fieldset>
+          <legend>1. 选择本次主实例</legend>
+          {group.instances.map((instance) => (
+            <label key={instance.id}>
+              <input
+                type="radio"
+                name={`merge-master-${group.id}`}
+                aria-label={`主实例 ${clientName(instance.client)} · ${instance.name}`}
+                checked={instance.id === masterId}
+                disabled={busy}
+                onChange={() => onChooseMaster(instance.id)}
+              />
+              <b>{clientName(instance.client)} · {instance.name}</b><small>{instance.path}</small>
+            </label>
+          ))}
+        </fieldset>
+        <fieldset>
+          <legend>2. 选择归并目标</legend>
+          {group.instances.filter((instance) => instance.id !== masterId).map((instance) => (
+            <label key={instance.id}>
+              <input
+                type="checkbox"
+                aria-label={`归并目标 ${clientName(instance.client)} · ${instance.name}`}
+                checked={targetIds.includes(instance.id)}
+                disabled={busy}
+                onChange={() => onToggleTarget(instance.id)}
+              />
+              <b>{clientName(instance.client)} · {instance.name}</b><small>{instance.path}</small>
+            </label>
+          ))}
+        </fieldset>
+      </div>
+      <button className="primary-button merge-preview-button" onClick={onPreview} disabled={busy || !masterId || targetIds.length === 0}>
+        预览安全归并
+      </button>
+
+      {plan ? (
+        <div className="merge-plan">
+          <div className="merge-warning">
+            <b>确认后，目标目录将完整采用主实例内容</b>
+            <span>目标额外文件只会按下列删除清单处理；每个目标会先独立备份。</span>
+          </div>
+          {plan.items.map((item, itemIndex) => {
+            const changes = item.changes ?? [];
+            return (
+              <article className="merge-target-plan" key={`${item.instanceId}-${itemIndex}`}>
+                <header><div><span>目标 {itemIndex + 1}</span><b>{item.target}</b></div><small>备份后原子替换</small></header>
+                <div className="merge-change-counts">
+                  <span>新增 {changes.filter((change) => change.status === "onlyLeft").length}</span>
+                  <span>覆盖 {changes.filter((change) => change.status === "modified").length}</span>
+                  <span className="delete">删除 {changes.filter((change) => change.status === "onlyRight").length}</span>
+                </div>
+                <div className="merge-change-list">
+                  {changes.map((change) => (
+                    <details key={change.relativePath}>
+                      <summary><b>{change.relativePath}</b><span>{mergeChangeName(change.status)}</span></summary>
+                      <FileDifference file={change} />
+                    </details>
+                  ))}
+                  {changes.length === 0 ? <p>目标已经与主实例一致；执行后仍会保持独立目录。</p> : null}
+                </div>
+              </article>
+            );
+          })}
+          {!results ? (
+            <button className="primary-button" onClick={onExecute} disabled={busy}>
+              确认归并 {plan.items.length} 个目标
+            </button>
+          ) : (
+            <div className="merge-results">
+              {results.map((result, index) => (
+                <div className={result.status} key={`${result.instanceId}-${index}`}>
+                  <b>{result.status === "success" ? "成功" : result.status === "failed" ? "失败" : "跳过"}</b>
+                  <span>{result.message}</span><small>{result.target}</small>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {history.length ? (
+        <div className="merge-history">
+          <h4>归并记录</h4>
+          {history.slice(0, 5).map((record) => (
+            <div key={record.batchId}>
+              <span>#{record.batchId} · {record.results.length || record.plan.items.length} 个目标</span>
+              {record.undoable && !record.undone ? (
+                <button className="secondary-button compact" onClick={() => onUndo(record.batchId)} disabled={busy}>撤销归并 #{record.batchId}</button>
+              ) : <small>已撤销</small>}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }
 
 function FileDifference({ file }: { file: DuplicateFileDifference }) {
+  const nodeTypeChanged =
+    file.leftNodeKind &&
+    file.rightNodeKind &&
+    file.leftNodeKind !== file.rightNodeKind;
+  const nodeTypeNotice = nodeTypeChanged ? (
+    <p className="node-type-change" role="note">
+      节点类型变化：主实例为{nodeKindName(file.leftNodeKind)}，目标为{nodeKindName(file.rightNodeKind)}。
+    </p>
+  ) : null;
   if (file.kind === "binary") {
     return (
-      <div className="binary-difference">
-        <div><span>实例 A</span><b>{formatBytes(file.leftSize)}</b><code>{file.leftFingerprint ?? "仅另一侧存在"}</code></div>
-        <div><span>实例 B</span><b>{formatBytes(file.rightSize)}</b><code>{file.rightFingerprint ?? "仅另一侧存在"}</code></div>
-      </div>
+      <>{nodeTypeNotice}<div className="binary-difference">
+        <div><span>实例 A · {nodeKindName(file.leftNodeKind)}</span><b>{formatBytes(file.leftSize)}</b><code>{file.leftFingerprint ?? "仅另一侧存在"}</code></div>
+        <div><span>实例 B · {nodeKindName(file.rightNodeKind)}</span><b>{formatBytes(file.rightSize)}</b><code>{file.rightFingerprint ?? "仅另一侧存在"}</code></div>
+      </div></>
     );
   }
   if (!file.textDiff?.length) {
-    return <div className="identical-file">文件内容一致，指纹相同。</div>;
+    return <>{nodeTypeNotice}<div className="identical-file">文件内容一致，指纹相同。</div></>;
   }
   return (
-    <div className="text-difference">
+    <>{nodeTypeNotice}<div className="text-difference">
       {file.textDiffTruncated ? (
         <p className="diff-truncated" role="note">
           差异过长，仅展示双方前 1000 行。
@@ -354,7 +659,7 @@ function FileDifference({ file }: { file: DuplicateFileDifference }) {
           <span>{line.rightLineNumber ?? ""}</span><code>{line.right ?? ""}</code>
         </div>
       ))}
-    </div>
+    </div></>
   );
 }
 
@@ -399,8 +704,8 @@ function DecisionSettings({
   );
 }
 
-function Metric({ label, count, tone = "all", active, onClick }: { label: string; count: number; tone?: string; active: boolean; onClick(): void }) {
-  return <button className={`duplicate-metric ${tone}${active ? " active" : ""}`} onClick={onClick}><span>{label}</span><b>{count}</b><small>{metricHint(tone)}</small></button>;
+function Metric({ label, count, tone = "all", active, disabled, onClick }: { label: string; count: number; tone?: string; active: boolean; disabled: boolean; onClick(): void }) {
+  return <button className={`duplicate-metric ${tone}${active ? " active" : ""}`} onClick={onClick} disabled={disabled}><span>{label}</span><b>{count}</b><small>{metricHint(tone)}</small></button>;
 }
 
 function StatusBadge({ status }: { status: DuplicateCheckStatus }) {
@@ -426,6 +731,14 @@ function ruleName(rule: DuplicateHitRule) {
 
 function fileStatusName(status: DuplicateFileDifference["status"]) {
   return { identical: "一致", modified: "已修改", onlyLeft: "仅 A 侧", onlyRight: "仅 B 侧（新增）" }[status];
+}
+
+function mergeChangeName(status: DuplicateFileDifference["status"]) {
+  return { identical: "不变", modified: "覆盖", onlyLeft: "新增", onlyRight: "删除" }[status];
+}
+
+function nodeKindName(kind: DuplicateFileDifference["leftNodeKind"]) {
+  return kind === "symbolicLink" ? "符号链接" : kind === "file" ? "普通文件" : "不存在";
 }
 
 function comparisonName(group: DuplicateGroup, comparison: DuplicateComparison) {

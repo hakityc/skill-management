@@ -205,6 +205,18 @@ fn restore_duplicate_decision(
 }
 
 #[tauri::command]
+fn plan_duplicate_merge(
+    master_instance_id: String,
+    target_instance_ids: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<FileOperationPlan, String> {
+    state
+        .workspace
+        .plan_duplicate_merge(&master_instance_id, &target_instance_ids)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn skill_organization(
     state: tauri::State<'_, AppState>,
 ) -> Result<SkillOrganizationSnapshot, String> {
@@ -377,6 +389,7 @@ pub fn run() {
             save_duplicate_decision,
             duplicate_decisions,
             restore_duplicate_decision,
+            plan_duplicate_merge,
             skill_organization,
             create_skill_group,
             rename_skill_group,

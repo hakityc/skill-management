@@ -57,6 +57,10 @@ export interface SkillGateway {
   saveDuplicateDecision(instanceIds: string[], kind: DuplicateDecisionKind): Promise<void>;
   duplicateDecisions(): Promise<DuplicateDecisionRecord[]>;
   restoreDuplicateDecision(decisionId: number): Promise<void>;
+  planDuplicateMerge(
+    masterInstanceId: string,
+    targetInstanceIds: string[],
+  ): Promise<FileOperationPlan>;
   skillOrganization(): Promise<SkillOrganizationSnapshot>;
   createSkillGroup(name: string): Promise<SkillOrganizationSnapshot>;
   renameSkillGroup(groupId: number, name: string): Promise<SkillOrganizationSnapshot>;
@@ -299,7 +303,9 @@ function SkillLibrary({
   const [selectedOrganizationIds, setSelectedOrganizationIds] = useState<string[]>([]);
   const [showOrganizationChange, setShowOrganizationChange] = useState(false);
   const [showGroupManagement, setShowGroupManagement] = useState(false);
-  const [fileOperationMode, setFileOperationMode] = useState<FileOperationKind | null>(null);
+  const [fileOperationMode, setFileOperationMode] = useState<
+    Exclude<FileOperationKind, "merge"> | null
+  >(null);
   const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
   const repairCount = snapshot.instances.filter(
     (skill) => skill.status === "needsRepair",

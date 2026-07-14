@@ -38,6 +38,7 @@ const unavailableEditingMethods: Pick<
   | "saveDuplicateDecision"
   | "duplicateDecisions"
   | "restoreDuplicateDecision"
+  | "planDuplicateMerge"
   | "skillOrganization"
   | "createSkillGroup"
   | "renameSkillGroup"
@@ -72,6 +73,7 @@ const unavailableEditingMethods: Pick<
   saveDuplicateDecision: async () => {},
   duplicateDecisions: async () => [],
   restoreDuplicateDecision: async () => {},
+  planDuplicateMerge: async () => ({ id: 1, kind: "merge", items: [], undoable: true }),
   skillOrganization: async () => ({ groups: [], instances: [] }),
   createSkillGroup: async () => ({ groups: [], instances: [] }),
   renameSkillGroup: async () => ({ groups: [], instances: [] }),
@@ -497,6 +499,7 @@ describe("Skill 管理器", () => {
       saveDuplicateDecision: async () => {},
       duplicateDecisions: async () => [],
       restoreDuplicateDecision: async () => {},
+      planDuplicateMerge: async () => ({ id: 1, kind: "merge", items: [], undoable: true }),
       skillOrganization: async () => ({ groups: [], instances: [] }),
       createSkillGroup: async () => ({ groups: [], instances: [] }),
       renameSkillGroup: async () => ({ groups: [], instances: [] }),

@@ -70,6 +70,11 @@ export function createTauriSkillGateway(): SkillGateway {
       invoke<DuplicateDecisionRecord[]>("duplicate_decisions"),
     restoreDuplicateDecision: (decisionId) =>
       invoke<void>("restore_duplicate_decision", { decisionId }),
+    planDuplicateMerge: (masterInstanceId, targetInstanceIds) =>
+      invoke<FileOperationPlan>("plan_duplicate_merge", {
+        masterInstanceId,
+        targetInstanceIds,
+      }),
     skillOrganization: () =>
       invoke<SkillOrganizationSnapshot>("skill_organization"),
     createSkillGroup: (name) =>

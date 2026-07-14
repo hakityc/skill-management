@@ -28,7 +28,7 @@ interface SafeFileOperationsProps {
   gateway: OperationGateway;
   snapshot: WorkspaceSnapshot;
   selectedInstances: SkillInstance[];
-  initialMode: FileOperationKind;
+  initialMode: Exclude<FileOperationKind, "merge">;
   onClose(): void;
   onSnapshotChange(snapshot: WorkspaceSnapshot): void;
   onCompleted?(): void;
@@ -43,7 +43,7 @@ export function SafeFileOperations({
   onSnapshotChange,
   onCompleted,
 }: SafeFileOperationsProps) {
-  const [mode, setMode] = useState<FileOperationKind>(initialMode);
+  const [mode, setMode] = useState<Exclude<FileOperationKind, "merge">>(initialMode);
   const [targetRootId, setTargetRootId] = useState<number | null>(
     snapshot.roots.find((root) => root.status === "ready")?.id ?? null,
   );
@@ -80,7 +80,7 @@ export function SafeFileOperations({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gateway]);
 
-  function changeMode(nextMode: FileOperationKind) {
+  function changeMode(nextMode: Exclude<FileOperationKind, "merge">) {
     invalidatePlan();
     setMode(nextMode);
     setResults(null);
@@ -238,7 +238,7 @@ export function SafeFileOperations({
         <div className="safe-operation-layout">
           <div className="safe-operation-workflow">
             <nav className="operation-tabs" aria-label="文件操作类型">
-              {(["import", "copy", "move", "trash"] as FileOperationKind[]).map(
+              {(["import", "copy", "move", "trash"] as Exclude<FileOperationKind, "merge">[]).map(
                 (item) => (
                   <button
                     key={item}
@@ -489,7 +489,7 @@ function OperationSelect({
 }
 
 function operationName(kind: FileOperationKind) {
-  return { import: "ZIP 导入", copy: "复制", move: "移动", trash: "移入废纸篓" }[kind];
+  return { import: "ZIP 导入", copy: "复制", move: "移动", trash: "移入废纸篓", merge: "重复归并" }[kind];
 }
 
 function resultStatusName(status: FileOperationItemResult["status"]) {
