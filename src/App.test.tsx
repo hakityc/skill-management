@@ -33,6 +33,10 @@ const unavailableEditingMethods: Pick<
   | "executeSkillChange"
   | "undoSkillChange"
   | "latestUndoableSkillChange"
+  | "reviewDuplicateGroups"
+  | "saveDuplicateDecision"
+  | "duplicateDecisions"
+  | "restoreDuplicateDecision"
 > = {
   skillDetail: async () => {
     throw new Error("当前测试不读取详情");
@@ -49,6 +53,10 @@ const unavailableEditingMethods: Pick<
     throw new Error("当前测试不执行撤销");
   },
   latestUndoableSkillChange: async () => null,
+  reviewDuplicateGroups: async () => ({ groups: [], suppressedCount: 0 }),
+  saveDuplicateDecision: async () => {},
+  duplicateDecisions: async () => [],
+  restoreDuplicateDecision: async () => {},
 };
 
 describe("Skill 管理器", () => {
@@ -104,10 +112,14 @@ describe("Skill 管理器", () => {
         },
       ],
     };
+    let currentSnapshot = emptySnapshot;
     const gateway = {
       ...unavailableEditingMethods,
-      loadSnapshot: async () => emptySnapshot,
-      chooseAndAuthorizeRoot: async () => scannedSnapshot,
+      loadSnapshot: async () => currentSnapshot,
+      async chooseAndAuthorizeRoot() {
+        currentSnapshot = scannedSnapshot;
+        return currentSnapshot;
+      },
       rescanRoot: async () => scannedSnapshot,
       removeRoot: async () => emptySnapshot,
       searchSkills: async () => ({
@@ -147,6 +159,10 @@ describe("Skill 管理器", () => {
       within(repairRow).getByText("YAML frontmatter 缺少 description"),
     ).toBeTruthy();
     expect(screen.getByText("/Users/example/.codex/skills")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "重复检查" }));
+    expect(
+      await screen.findByRole("heading", { name: "把相似，变成确定。" }),
+    ).toBeTruthy();
   });
 
   test("个人用户管理常见客户端根目录并可单独重扫和安全移除", async () => {
@@ -448,6 +464,10 @@ describe("Skill 管理器", () => {
         return { operationId: 9, snapshot };
       },
       latestUndoableSkillChange: async () => null,
+      reviewDuplicateGroups: async () => ({ groups: [], suppressedCount: 0 }),
+      saveDuplicateDecision: async () => {},
+      duplicateDecisions: async () => [],
+      restoreDuplicateDecision: async () => {},
     };
 
     render(<SkillManagerApp gateway={gateway} />);

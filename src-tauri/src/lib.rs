@@ -3,9 +3,10 @@
 use std::path::PathBuf;
 
 use skill_workspace::{
-    SkillChangeOutcome, SkillChangePlan, SkillChangeRecord, SkillDetail, SkillDraft,
-    SkillDraftValidation, SkillFilePreview, SkillQuery, SkillSearchResult, SkillWorkspace,
-    SkillWorkspaceViewPreferences, WorkspaceSnapshot,
+    DuplicateDecisionKind, DuplicateDecisionRecord, DuplicateReview, SkillChangeOutcome,
+    SkillChangePlan, SkillChangeRecord, SkillDetail, SkillDraft, SkillDraftValidation,
+    SkillFilePreview, SkillQuery, SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences,
+    WorkspaceSnapshot,
 };
 use tauri::Manager;
 
@@ -160,6 +161,47 @@ fn latest_undoable_skill_change(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn review_duplicate_groups(state: tauri::State<'_, AppState>) -> Result<DuplicateReview, String> {
+    state
+        .workspace
+        .review_duplicate_groups()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_duplicate_decision(
+    instance_ids: Vec<String>,
+    kind: DuplicateDecisionKind,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .workspace
+        .save_duplicate_decision(&instance_ids, kind)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn duplicate_decisions(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<DuplicateDecisionRecord>, String> {
+    state
+        .workspace
+        .duplicate_decisions()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restore_duplicate_decision(
+    decision_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .workspace
+        .restore_duplicate_decision(decision_id)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -186,7 +228,11 @@ pub fn run() {
             plan_skill_change,
             execute_skill_change,
             undo_skill_change,
-            latest_undoable_skill_change
+            latest_undoable_skill_change,
+            review_duplicate_groups,
+            save_duplicate_decision,
+            duplicate_decisions,
+            restore_duplicate_decision
         ])
         .run(tauri::generate_context!())
         .expect("启动 Skill 管理器失败");

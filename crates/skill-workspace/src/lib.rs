@@ -1,9 +1,16 @@
 //! 本地 Skill 管理的最高层应用接缝。
 
 mod detail;
+mod duplicate;
 mod edit;
 
 pub use detail::{SkillDetail, SkillFileEntry, SkillFileKind, SkillFilePreview};
+pub use duplicate::{
+    DUPLICATE_SIMILARITY_THRESHOLD, DuplicateComparison, DuplicateDecisionKind,
+    DuplicateDecisionRecord, DuplicateFileDifference, DuplicateFileDifferenceStatus,
+    DuplicateFileKind, DuplicateGroup, DuplicateHitRule, DuplicateReview, DuplicateReviewInstance,
+    DuplicateTextDiffLine, DuplicateTextDiffLineKind,
+};
 pub use edit::{
     SkillChangeKind, SkillChangeOutcome, SkillChangePlan, SkillChangeRecord, SkillDraft,
     SkillDraftTarget, SkillDraftValidation, SkillFileDraftChange, SkillFileDraftOperation,
@@ -278,6 +285,13 @@ impl SkillWorkspace {
                 undone INTEGER NOT NULL DEFAULT 0,
                 completed INTEGER NOT NULL DEFAULT 0,
                 undoing INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS duplicate_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_key TEXT NOT NULL UNIQUE,
+                instance_ids TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                created_at INTEGER NOT NULL
             );
             ",
         )?;

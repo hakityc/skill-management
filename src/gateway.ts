@@ -3,6 +3,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import type { SkillGateway } from "./App";
 import type {
+  DuplicateDecisionKind,
+  DuplicateDecisionRecord,
+  DuplicateReview,
   SkillQuery,
   SkillChangeOutcome,
   SkillChangePlan,
@@ -53,5 +56,12 @@ export function createTauriSkillGateway(): SkillGateway {
       invoke<SkillChangeOutcome>("undo_skill_change", { operationId }),
     latestUndoableSkillChange: () =>
       invoke<SkillChangeRecord | null>("latest_undoable_skill_change"),
+    reviewDuplicateGroups: () => invoke<DuplicateReview>("review_duplicate_groups"),
+    saveDuplicateDecision: (instanceIds, kind: DuplicateDecisionKind) =>
+      invoke<void>("save_duplicate_decision", { instanceIds, kind }),
+    duplicateDecisions: () =>
+      invoke<DuplicateDecisionRecord[]>("duplicate_decisions"),
+    restoreDuplicateDecision: (decisionId) =>
+      invoke<void>("restore_duplicate_decision", { decisionId }),
   };
 }

@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 
 import type {
+  DuplicateDecisionKind,
+  DuplicateDecisionRecord,
   DuplicateCheckStatus,
+  DuplicateReview,
   SkillClient,
   SkillChangeOutcome,
   SkillChangePlan,
@@ -19,6 +22,7 @@ import type {
   SkillWorkspaceViewPreferences,
   WorkspaceSnapshot,
 } from "./models";
+import { DuplicateGovernance } from "./DuplicateGovernance";
 import "./styles.css";
 
 export interface SkillGateway {
@@ -36,6 +40,10 @@ export interface SkillGateway {
   executeSkillChange(planId: number): Promise<SkillChangeOutcome>;
   undoSkillChange(operationId: number): Promise<SkillChangeOutcome>;
   latestUndoableSkillChange(): Promise<SkillChangeRecord | null>;
+  reviewDuplicateGroups(): Promise<DuplicateReview>;
+  saveDuplicateDecision(instanceIds: string[], kind: DuplicateDecisionKind): Promise<void>;
+  duplicateDecisions(): Promise<DuplicateDecisionRecord[]>;
+  restoreDuplicateDecision(decisionId: number): Promise<void>;
 }
 
 interface SkillManagerAppProps {
@@ -54,7 +62,7 @@ export function SkillManagerApp({ gateway }: SkillManagerAppProps) {
   const [selecting, setSelecting] = useState(false);
   const [busyRootId, setBusyRootId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<"library" | "roots">("library");
+  const [view, setView] = useState<"library" | "roots" | "duplicates">("library");
 
   useEffect(() => {
     let isEffectActive = true;
@@ -125,11 +133,18 @@ export function SkillManagerApp({ gateway }: SkillManagerAppProps) {
             onRescan={(rootId) => updateRoot(rootId, "rescan")}
             onRemove={(rootId) => updateRoot(rootId, "remove")}
           />
+        ) : view === "duplicates" ? (
+          <DuplicateGovernance
+            gateway={gateway}
+            onBack={() => setView("library")}
+            onSnapshotChange={setSnapshot}
+          />
         ) : (
           <SkillLibrary
             gateway={gateway}
             snapshot={snapshot}
             onManageRoots={() => setView("roots")}
+            onReviewDuplicates={() => setView("duplicates")}
             onSnapshotChange={setSnapshot}
           />
         )
@@ -213,11 +228,13 @@ function SkillLibrary({
   gateway,
   snapshot,
   onManageRoots,
+  onReviewDuplicates,
   onSnapshotChange,
 }: {
   gateway: SkillGateway;
   snapshot: WorkspaceSnapshot;
   onManageRoots(): void;
+  onReviewDuplicates(): void;
   onSnapshotChange(snapshot: WorkspaceSnapshot): void;
 }) {
   const [queryText, setQueryText] = useState("");
@@ -243,6 +260,9 @@ function SkillLibrary({
   const [lastOperationId, setLastOperationId] = useState<number | null>(null);
   const repairCount = snapshot.instances.filter(
     (skill) => skill.status === "needsRepair",
+  ).length;
+  const duplicateCount = snapshot.instances.filter(
+    (skill) => skill.duplicateCheckStatus !== "none",
   ).length;
   const rootsById = new Map(snapshot.roots.map((root) => [root.id, root]));
 
@@ -518,6 +538,10 @@ function SkillLibrary({
         <button className="nav-item" aria-label="管理根目录" onClick={onManageRoots}>
           <span>管理根目录</span>
           <b>{snapshot.roots.length}</b>
+        </button>
+        <button className="nav-item" aria-label="重复检查" onClick={onReviewDuplicates}>
+          <span>重复检查</span>
+          <b>{duplicateCount}</b>
         </button>
         <div className="root-card">
           <span>当前根目录</span>

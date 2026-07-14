@@ -167,3 +167,78 @@ export interface SkillChangeRecord {
   targetDirectory: string;
   createdAt: number;
 }
+
+export type DuplicateHitRule =
+  | "exactContent"
+  | "normalizedName"
+  | "contentSimilarity";
+
+export type DuplicateFileDifferenceStatus =
+  | "identical"
+  | "modified"
+  | "onlyLeft"
+  | "onlyRight";
+
+export type DuplicateFileKind = "text" | "binary";
+export type DuplicateTextDiffLineKind = "equal" | "modified" | "onlyLeft" | "onlyRight";
+export type DuplicateDecisionKind = "notDuplicate" | "ignored";
+
+export interface DuplicateTextDiffLine {
+  kind: DuplicateTextDiffLineKind;
+  leftLineNumber: number | null;
+  rightLineNumber: number | null;
+  left: string | null;
+  right: string | null;
+}
+
+export interface DuplicateFileDifference {
+  relativePath: string;
+  status: DuplicateFileDifferenceStatus;
+  kind: DuplicateFileKind;
+  leftSize: number | null;
+  rightSize: number | null;
+  leftFingerprint: string | null;
+  rightFingerprint: string | null;
+  textDiff: DuplicateTextDiffLine[] | null;
+  textDiffTruncated: boolean;
+}
+
+export interface DuplicateComparison {
+  leftInstanceId: string;
+  rightInstanceId: string;
+  status: DuplicateCheckStatus;
+  similarity: number;
+  hitRules: DuplicateHitRule[];
+  files: DuplicateFileDifference[];
+}
+
+export interface DuplicateReviewInstance {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  client: SkillClient;
+}
+
+export interface DuplicateGroup {
+  id: string;
+  name: string;
+  status: DuplicateCheckStatus;
+  similarity: number;
+  hitRules: DuplicateHitRule[];
+  fingerprintFiles: string[];
+  instances: DuplicateReviewInstance[];
+  comparisons: DuplicateComparison[];
+}
+
+export interface DuplicateReview {
+  groups: DuplicateGroup[];
+  suppressedCount: number;
+}
+
+export interface DuplicateDecisionRecord {
+  id: number;
+  instanceIds: string[];
+  kind: DuplicateDecisionKind;
+  createdAt: number;
+}
