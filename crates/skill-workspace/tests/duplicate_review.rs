@@ -92,7 +92,7 @@ fn personal_user_reviews_exact_suspected_and_name_conflict_groups_with_file_evid
     workspace.add_root(&gemini).unwrap();
     let review = workspace
         .review_duplicate_groups()
-        .expect("生成重复审阅结果");
+        .expect("生成重复检查结果");
 
     assert_eq!(review.groups.len(), 3);
     let exact = review
@@ -179,33 +179,25 @@ fn personal_user_reviews_exact_suspected_and_name_conflict_groups_with_file_evid
 }
 
 #[test]
-fn similarity_threshold_is_inclusive_at_point_eight_two() {
+fn similarity_threshold_includes_exact_point_eight_two_and_excludes_the_lower_fixture() {
     let sandbox = tempdir().expect("创建临时工作区");
-    let left_root = sandbox.path().join("left/skills");
-    let right_root = sandbox.path().join("right/skills");
+    let left_root = sandbox.path().join("at-threshold/left/skills");
+    let right_root = sandbox.path().join("at-threshold/right/skills");
     write_skill(
         &left_root,
         "alpha",
-        "alpha-check",
-        "检查发布流程。",
-        &format!(
-            "# 检查\n\n{}{}",
-            "共同步骤。".repeat(35),
-            "左侧差异。".repeat(6)
-        ),
+        "boundary-review",
+        "检查边界。",
+        &format!("{}{}", "共".repeat(24), "甲".repeat(17)),
     );
     write_skill(
         &right_root,
         "beta",
-        "beta-audit",
-        "审阅发布流程。",
-        &format!(
-            "# 检查\n\n{}{}",
-            "共同步骤。".repeat(35),
-            "右侧变化。".repeat(6)
-        ),
+        "boundary-review",
+        "检查边界。",
+        &format!("{}{}", "共".repeat(24), "乙".repeat(17)),
     );
-    let workspace = SkillWorkspace::open(sandbox.path().join("index.sqlite3")).unwrap();
+    let workspace = SkillWorkspace::open(sandbox.path().join("at-threshold.sqlite3")).unwrap();
     let left = workspace.add_root(&left_root).unwrap().instances[0]
         .id
         .clone();
@@ -215,14 +207,51 @@ fn similarity_threshold_is_inclusive_at_point_eight_two() {
     let comparison = workspace
         .compare_skill_instances(&left, &right)
         .expect("比较阈值夹具");
-    assert!(
-        comparison.similarity >= 0.82 && comparison.similarity < 0.9,
-        "实际相似度为 {}",
-        comparison.similarity
-    );
+    assert_eq!(comparison.similarity, 0.82);
     assert_eq!(comparison.status, DuplicateCheckStatus::Suspected);
     assert!(
         comparison
+            .hit_rules
+            .contains(&DuplicateHitRule::ContentSimilarity)
+    );
+
+    let below_left_root = sandbox.path().join("below-threshold/left/skills");
+    let below_right_root = sandbox.path().join("below-threshold/right/skills");
+    write_skill(
+        &below_left_root,
+        "alpha",
+        "boundary-review",
+        "检查边界。",
+        &format!("{}{}", "共".repeat(24), "甲".repeat(18)),
+    );
+    write_skill(
+        &below_right_root,
+        "beta",
+        "boundary-review",
+        "检查边界。",
+        &format!("{}{}", "共".repeat(24), "乙".repeat(18)),
+    );
+    let below_workspace =
+        SkillWorkspace::open(sandbox.path().join("below-threshold.sqlite3")).unwrap();
+    let below_left = below_workspace
+        .add_root(&below_left_root)
+        .unwrap()
+        .instances[0]
+        .id
+        .clone();
+    let below_right = below_workspace
+        .add_root(&below_right_root)
+        .unwrap()
+        .instances[1]
+        .id
+        .clone();
+    let below = below_workspace
+        .compare_skill_instances(&below_left, &below_right)
+        .expect("比较阈值下方夹具");
+    assert!(below.similarity < 0.82);
+    assert_eq!(below.status, DuplicateCheckStatus::NameConflict);
+    assert!(
+        !below
             .hit_rules
             .contains(&DuplicateHitRule::ContentSimilarity)
     );

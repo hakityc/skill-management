@@ -441,7 +441,7 @@ fn classify_pair(left: &InstanceContent, right: &InstanceContent) -> PairClassif
     }
     PairClassification {
         status,
-        similarity: rounded_similarity(raw_similarity),
+        similarity: raw_similarity,
         hit_rules,
     }
 }
@@ -702,13 +702,11 @@ fn build_groups(
         } else {
             DuplicateCheckStatus::NameConflict
         };
-        let similarity = rounded_similarity(
-            comparisons
-                .iter()
-                .map(|comparison| comparison.similarity)
-                .sum::<f64>()
-                / comparisons.len() as f64,
-        );
+        let similarity = comparisons
+            .iter()
+            .map(|comparison| comparison.similarity)
+            .sum::<f64>()
+            / comparisons.len() as f64;
         let hit_rules = comparisons
             .iter()
             .flat_map(|comparison| comparison.hit_rules.iter().cloned())
@@ -782,10 +780,6 @@ fn normalized_name(name: &str) -> String {
         .flat_map(char::to_lowercase)
         .filter(|character| character.is_alphanumeric())
         .collect()
-}
-
-fn rounded_similarity(value: f64) -> f64 {
-    (value * 1000.0).round() / 1000.0
 }
 
 fn stable_fingerprint(bytes: &[u8]) -> String {

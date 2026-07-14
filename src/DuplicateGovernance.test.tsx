@@ -13,7 +13,7 @@ import type {
 
 afterEach(cleanup);
 
-describe("重复治理中心", () => {
+describe("重复检查中心", () => {
   test("个人用户查看判定依据、逐文件差异并保存和恢复裁决", async () => {
     const snapshot: WorkspaceSnapshot = { authorizedRoot: null, roots: [], instances: [] };
     const suspected = duplicateGroup("suspected", "release-notes", 0.824);

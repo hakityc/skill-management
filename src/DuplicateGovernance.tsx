@@ -177,7 +177,7 @@ export function DuplicateGovernance({
             <span aria-hidden="true">⌕</span>
             <input
               type="search"
-              aria-label="搜索重复组"
+              aria-label="搜索 Skill 组"
               placeholder="搜索名称、实例或路径"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -200,7 +200,7 @@ export function DuplicateGovernance({
               </button>
             ))}
             {!loading && filteredGroups.length === 0 ? (
-              <div className="duplicate-empty"><strong>没有待检查的 Skill 组</strong><span>可以查看已忽略结果，或重新检查本地目录。</span></div>
+              <div className="duplicate-empty"><strong>没有待检查的 Skill 组</strong><span>可以查看已忽略结果，或重新检查 Skill 根目录。</span></div>
             ) : null}
           </div>
           <footer><span><i /> 本地检查规则 v1</span><button onClick={openDecisionSettings}>查看忽略项</button></footer>
@@ -265,9 +265,9 @@ function ComparisonStage({
     <section className="duplicate-stage">
       <div className="comparison-heading">
         <div>
-          <span>重复检查 / {statusName(group.status)}</span>
+          <span>重复检查 / {statusName(comparison.status)}</span>
           <h2>{group.name}</h2>
-          <p>{statusDescription(group.status)}</p>
+          <p>{statusDescription(comparison.status)}</p>
         </div>
         <div className="comparison-actions">
           <button className="secondary-button" onClick={onIgnore} disabled={busy}>暂时忽略</button>
@@ -277,8 +277,8 @@ function ComparisonStage({
 
       <div className="comparison-rules">
         <span>命中规则</span>
-        {group.hitRules.map((rule) => <b key={rule}>{ruleName(rule)}</b>)}
-        <span>参与指纹：{group.fingerprintFiles.join("、")}</span>
+        {comparison.hitRules.map((rule) => <b key={rule}>{ruleName(rule)}</b>)}
+        <span>参与指纹：{comparison.files.map((file) => file.relativePath).join("、")}</span>
       </div>
 
       {group.comparisons.length > 1 ? (
@@ -443,7 +443,7 @@ function clientName(client: SkillClient) {
 }
 
 function formatPercent(value: number) {
-  return `${Math.round(value * 100)}%`;
+  return `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value * 100)}%`;
 }
 
 function formatBytes(value: number | null) {
