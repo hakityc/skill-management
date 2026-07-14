@@ -3,10 +3,12 @@
 use std::path::PathBuf;
 
 use skill_workspace::{
-    DuplicateDecisionKind, DuplicateDecisionRecord, DuplicateReview, SkillChangeOutcome,
+    DuplicateDecisionKind, DuplicateDecisionRecord, DuplicateReview, FileOperationBatchOutcome,
+    FileOperationPlan, FileOperationRecord, FileOperationRequest, SkillChangeOutcome,
     SkillChangePlan, SkillChangeRecord, SkillDetail, SkillDraft, SkillDraftValidation,
     SkillFilePreview, SkillOrganizationChange, SkillOrganizationSnapshot, SkillQuery,
     SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences, WorkspaceSnapshot,
+    ZipImportRequest,
 };
 use tauri::Manager;
 
@@ -269,6 +271,81 @@ fn reorder_skill_group(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn plan_file_operations(
+    request: FileOperationRequest,
+    state: tauri::State<'_, AppState>,
+) -> Result<FileOperationPlan, String> {
+    state
+        .workspace
+        .plan_file_operations(&request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn preview_zip_import(
+    request: ZipImportRequest,
+    state: tauri::State<'_, AppState>,
+) -> Result<FileOperationPlan, String> {
+    state
+        .workspace
+        .preview_zip_import(&request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn execute_file_operation_plan(
+    plan_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<FileOperationBatchOutcome, String> {
+    state
+        .workspace
+        .execute_file_operation_plan(plan_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn cancel_file_operation_plan(
+    plan_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .workspace
+        .cancel_file_operation_plan(plan_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn file_operation_history(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<FileOperationRecord>, String> {
+    state
+        .workspace
+        .file_operation_history()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn latest_undoable_file_operation(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<FileOperationRecord>, String> {
+    state
+        .workspace
+        .latest_undoable_file_operation()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn undo_file_operation_batch(
+    batch_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceSnapshot, String> {
+    state
+        .workspace
+        .undo_file_operation_batch(batch_id)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -305,7 +382,14 @@ pub fn run() {
             rename_skill_group,
             delete_skill_group,
             apply_skill_organization_change,
-            reorder_skill_group
+            reorder_skill_group,
+            plan_file_operations,
+            preview_zip_import,
+            execute_file_operation_plan,
+            cancel_file_operation_plan,
+            file_operation_history,
+            latest_undoable_file_operation,
+            undo_file_operation_batch
         ])
         .run(tauri::generate_context!())
         .expect("启动 Skill 管理器失败");

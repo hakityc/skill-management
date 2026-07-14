@@ -44,6 +44,14 @@ const unavailableEditingMethods: Pick<
   | "deleteSkillGroup"
   | "applySkillOrganizationChange"
   | "reorderSkillGroup"
+  | "chooseZipFile"
+  | "planFileOperations"
+  | "previewZipImport"
+  | "executeFileOperationPlan"
+  | "cancelFileOperationPlan"
+  | "fileOperationHistory"
+  | "latestUndoableFileOperation"
+  | "undoFileOperationBatch"
 > = {
   skillDetail: async () => {
     throw new Error("当前测试不读取详情");
@@ -70,6 +78,14 @@ const unavailableEditingMethods: Pick<
   deleteSkillGroup: async () => ({ groups: [], instances: [] }),
   applySkillOrganizationChange: async () => ({ groups: [], instances: [] }),
   reorderSkillGroup: async () => ({ groups: [], instances: [] }),
+  chooseZipFile: async () => null,
+  planFileOperations: async () => ({ id: 1, kind: "copy", items: [], undoable: true }),
+  previewZipImport: async () => ({ id: 1, kind: "import", items: [], undoable: true }),
+  executeFileOperationPlan: async () => ({ batchId: 1, results: [], snapshot: { authorizedRoot: null, roots: [], instances: [] } }),
+  cancelFileOperationPlan: async () => {},
+  fileOperationHistory: async () => [],
+  latestUndoableFileOperation: async () => null,
+  undoFileOperationBatch: async () => ({ authorizedRoot: null, roots: [], instances: [] }),
 };
 
 describe("Skill 管理器", () => {
@@ -126,7 +142,7 @@ describe("Skill 管理器", () => {
       ],
     };
     let currentSnapshot = emptySnapshot;
-    const gateway = {
+    const gateway: SkillGateway = {
       ...unavailableEditingMethods,
       loadSnapshot: async () => currentSnapshot,
       async chooseAndAuthorizeRoot() {
@@ -422,7 +438,7 @@ describe("Skill 管理器", () => {
     let plannedDescription: string | null = null;
     let executed = false;
     let undone = false;
-    const gateway = {
+    const gateway: SkillGateway = {
       loadSnapshot: async () => snapshot,
       chooseAndAuthorizeRoot: async () => null,
       rescanRoot: async () => snapshot,
@@ -487,6 +503,14 @@ describe("Skill 管理器", () => {
       deleteSkillGroup: async () => ({ groups: [], instances: [] }),
       applySkillOrganizationChange: async () => ({ groups: [], instances: [] }),
       reorderSkillGroup: async () => ({ groups: [], instances: [] }),
+      chooseZipFile: async () => null,
+      planFileOperations: async () => ({ id: 1, kind: "copy", items: [], undoable: true }),
+      previewZipImport: async () => ({ id: 1, kind: "import", items: [], undoable: true }),
+      executeFileOperationPlan: async () => ({ batchId: 1, results: [], snapshot }),
+      cancelFileOperationPlan: async () => {},
+      fileOperationHistory: async () => [],
+      latestUndoableFileOperation: async () => null,
+      undoFileOperationBatch: async () => snapshot,
     };
 
     render(<SkillManagerApp gateway={gateway} />);

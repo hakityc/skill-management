@@ -3,6 +3,7 @@
 mod detail;
 mod duplicate;
 mod edit;
+mod file_operations;
 mod organization;
 
 pub use detail::{SkillDetail, SkillFileEntry, SkillFileKind, SkillFilePreview};
@@ -16,6 +17,11 @@ pub use edit::{
     SkillChangeKind, SkillChangeOutcome, SkillChangePlan, SkillChangeRecord, SkillDraft,
     SkillDraftTarget, SkillDraftValidation, SkillFileDraftChange, SkillFileDraftOperation,
     SkillPlannedChange, SkillValidationIssue,
+};
+pub use file_operations::{
+    FileConflictPolicy, FileOperationBatchOutcome, FileOperationItemResult, FileOperationKind,
+    FileOperationPlan, FileOperationRecord, FileOperationRequest, FileOperationResultStatus,
+    PlannedFileOperationItem, ZipImportRequest,
 };
 pub use organization::{
     OrganizationSkillGroup, SkillInstanceOrganization, SkillOrganizationChange,
@@ -64,6 +70,18 @@ pub enum WorkspaceError {
     UnknownChangeOperation(i64),
     #[error("该编辑操作已经撤销")]
     ChangeAlreadyUndone,
+    #[error("文件操作无效：{0}")]
+    InvalidFileOperation(String),
+    #[error("ZIP 导入无效：{0}")]
+    InvalidArchive(String),
+    #[error("找不到文件操作计划：{0}")]
+    UnknownFileOperationPlan(i64),
+    #[error("找不到文件操作记录：{0}")]
+    UnknownFileOperationBatch(i64),
+    #[error("文件操作计划已过期：{0}")]
+    StaleFileOperationPlan(String),
+    #[error("该文件操作已经撤销")]
+    FileOperationAlreadyUndone,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +252,7 @@ pub struct WorkspaceSnapshot {
 #[derive(Debug, Clone)]
 pub struct SkillWorkspace {
     database_path: PathBuf,
+    trash_directory: Option<PathBuf>,
 }
 
 impl SkillWorkspace {
@@ -306,9 +325,25 @@ impl SkillWorkspace {
         )?;
         migrate_workspace_index(&connection)?;
         organization::initialize_organization(&connection)?;
+        file_operations::initialize_file_operations(&connection)?;
         drop(connection);
-        let workspace = Self { database_path };
+        let workspace = Self {
+            database_path,
+            trash_directory: None,
+        };
         workspace.recover_interrupted_changes()?;
+        workspace.cleanup_abandoned_file_operation_plans()?;
+        workspace.recover_interrupted_file_operations()?;
+        workspace.cleanup_orphan_file_operation_backups()?;
+        Ok(workspace)
+    }
+
+    pub fn open_with_trash_directory(
+        database_path: impl Into<PathBuf>,
+        trash_directory: impl Into<PathBuf>,
+    ) -> Result<Self, WorkspaceError> {
+        let mut workspace = Self::open(database_path)?;
+        workspace.trash_directory = Some(trash_directory.into());
         Ok(workspace)
     }
 
@@ -1251,6 +1286,7 @@ fn is_ignored_directory(name: &std::ffi::OsStr) -> bool {
             | "target"
             | "$RECYCLE.BIN"
             | "System Volume Information"
+            | ".skill-management-backups"
     ) || name.ends_with("_cache")
 }
 

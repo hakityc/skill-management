@@ -193,6 +193,69 @@ export interface SkillChangeRecord {
   createdAt: number;
 }
 
+export type FileOperationKind = "import" | "copy" | "move" | "trash";
+export type FileConflictPolicy = "skip" | "overwrite";
+
+export interface FileOperationRequest {
+  instanceIds: string[];
+  kind: Exclude<FileOperationKind, "import">;
+  targetRootId: number | null;
+  conflictPolicy: FileConflictPolicy;
+}
+
+export interface ZipImportRequest {
+  zipPath: string;
+  targetRootId: number;
+  relativePath: string;
+  conflictPolicy: FileConflictPolicy;
+}
+
+export interface PlannedFileOperationItem {
+  instanceId: string | null;
+  source: string;
+  target: string | null;
+  conflict: boolean;
+  willOverwrite: boolean;
+  willRemoveSource: boolean;
+  fileCount: number;
+  totalSize: number;
+}
+
+export interface FileOperationPlan {
+  id: number;
+  kind: FileOperationKind;
+  items: PlannedFileOperationItem[];
+  undoable: boolean;
+}
+
+export type FileOperationResultStatus = "success" | "failed" | "skipped";
+
+export interface FileOperationItemResult {
+  instanceId: string | null;
+  source: string;
+  target: string | null;
+  status: FileOperationResultStatus;
+  message: string;
+  backupCreated: boolean;
+}
+
+export interface FileOperationBatchOutcome {
+  batchId: number;
+  results: FileOperationItemResult[];
+  snapshot: WorkspaceSnapshot;
+}
+
+export interface FileOperationRecord {
+  batchId: number;
+  planId: number;
+  kind: FileOperationKind;
+  createdAt: number;
+  undoable: boolean;
+  undone: boolean;
+  plan: FileOperationPlan;
+  results: FileOperationItemResult[];
+}
+
 export type DuplicateHitRule =
   | "exactContent"
   | "normalizedName"

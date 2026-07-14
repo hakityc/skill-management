@@ -613,7 +613,7 @@ fn is_text_file(path: &Path) -> bool {
         .is_some_and(|content| std::str::from_utf8(&content).is_ok())
 }
 
-fn directory_fingerprint(directory: &Path) -> Result<u64, WorkspaceError> {
+pub(crate) fn directory_fingerprint(directory: &Path) -> Result<u64, WorkspaceError> {
     let mut hasher = DefaultHasher::new();
     fingerprint_directory(directory, directory, &mut hasher)?;
     Ok(hasher.finish())
@@ -644,7 +644,7 @@ fn fingerprint_directory(
     Ok(())
 }
 
-fn copy_directory(source: &Path, destination: &Path) -> Result<(), WorkspaceError> {
+pub(crate) fn copy_directory(source: &Path, destination: &Path) -> Result<(), WorkspaceError> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -718,7 +718,7 @@ fn ensure_safe_parent(stage: &Path, relative_path: &Path) -> Result<(), Workspac
     Ok(())
 }
 
-fn sibling_work_path(
+pub(crate) fn sibling_work_path(
     target: &Path,
     purpose: &str,
     identifier: i64,
@@ -733,7 +733,7 @@ fn sibling_work_path(
     Ok(parent.join(format!(".skill-management-{purpose}-{identifier}-{name}")))
 }
 
-fn atomic_replace_directory(
+pub(crate) fn atomic_replace_directory(
     stage: &Path,
     target: &Path,
     identifier: i64,
@@ -793,7 +793,7 @@ fn apply_undo(
     atomic_replace_directory(&stage, target, operation_id)
 }
 
-fn remove_path_if_exists(path: &Path) -> Result<(), WorkspaceError> {
+pub(crate) fn remove_path_if_exists(path: &Path) -> Result<(), WorkspaceError> {
     let metadata = match path.symlink_metadata() {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),

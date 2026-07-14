@@ -5,6 +5,11 @@ import type {
   DuplicateDecisionRecord,
   DuplicateCheckStatus,
   DuplicateReview,
+  FileOperationBatchOutcome,
+  FileOperationKind,
+  FileOperationPlan,
+  FileOperationRecord,
+  FileOperationRequest,
   SkillClient,
   SkillChangeOutcome,
   SkillChangePlan,
@@ -23,8 +28,10 @@ import type {
   SkillSort,
   SkillWorkspaceViewPreferences,
   WorkspaceSnapshot,
+  ZipImportRequest,
 } from "./models";
 import { DuplicateGovernance } from "./DuplicateGovernance";
+import { SafeFileOperations } from "./SafeFileOperations";
 import {
   GroupManagementDialog,
   OrganizationChangeDialog,
@@ -61,6 +68,14 @@ export interface SkillGateway {
     groupId: number,
     orderedInstanceIds: string[],
   ): Promise<SkillOrganizationSnapshot>;
+  chooseZipFile(): Promise<string | null>;
+  planFileOperations(request: FileOperationRequest): Promise<FileOperationPlan>;
+  previewZipImport(request: ZipImportRequest): Promise<FileOperationPlan>;
+  executeFileOperationPlan(planId: number): Promise<FileOperationBatchOutcome>;
+  cancelFileOperationPlan(planId: number): Promise<void>;
+  fileOperationHistory(): Promise<FileOperationRecord[]>;
+  latestUndoableFileOperation(): Promise<FileOperationRecord | null>;
+  undoFileOperationBatch(batchId: number): Promise<WorkspaceSnapshot>;
 }
 
 interface SkillManagerAppProps {
@@ -284,6 +299,7 @@ function SkillLibrary({
   const [selectedOrganizationIds, setSelectedOrganizationIds] = useState<string[]>([]);
   const [showOrganizationChange, setShowOrganizationChange] = useState(false);
   const [showGroupManagement, setShowGroupManagement] = useState(false);
+  const [fileOperationMode, setFileOperationMode] = useState<FileOperationKind | null>(null);
   const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
   const repairCount = snapshot.instances.filter(
     (skill) => skill.status === "needsRepair",
@@ -799,6 +815,9 @@ function SkillLibrary({
                 撤销最近编辑
               </button>
             ) : null}
+            <button className="secondary-button compact" onClick={() => setFileOperationMode("import")}>
+              导入 ZIP
+            </button>
             <button className="primary-button compact" onClick={openNewEditor}>
               新建 Skill
             </button>
@@ -913,6 +932,9 @@ function SkillLibrary({
             <span>已选择 {selectedOrganizationIds.length} 个 Skill 实例</span>
             <button className="primary-button compact" onClick={() => setShowOrganizationChange(true)}>
               批量整理
+            </button>
+            <button className="secondary-button compact" onClick={() => setFileOperationMode("move")}>
+              安全文件操作
             </button>
             <button className="secondary-button compact" onClick={() => setSelectedOrganizationIds([])}>
               取消选择
@@ -1030,6 +1052,20 @@ function SkillLibrary({
           onReorder={(groupId, orderedInstanceIds) =>
             updateOrganization(() => gateway.reorderSkillGroup(groupId, orderedInstanceIds))
           }
+        />
+      ) : null}
+      {fileOperationMode ? (
+        <SafeFileOperations
+          gateway={gateway}
+          snapshot={snapshot}
+          selectedInstances={selectedOrganizationInstances}
+          initialMode={fileOperationMode}
+          onClose={() => setFileOperationMode(null)}
+          onSnapshotChange={onSnapshotChange}
+          onCompleted={() => {
+            setSelectedOrganizationIds([]);
+            setOrganizationRevision((current) => current + 1);
+          }}
         />
       ) : null}
     </main>

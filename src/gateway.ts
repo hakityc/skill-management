@@ -6,6 +6,10 @@ import type {
   DuplicateDecisionKind,
   DuplicateDecisionRecord,
   DuplicateReview,
+  FileOperationBatchOutcome,
+  FileOperationPlan,
+  FileOperationRecord,
+  FileOperationRequest,
   SkillQuery,
   SkillChangeOutcome,
   SkillChangePlan,
@@ -19,6 +23,7 @@ import type {
   SkillSearchResult,
   SkillWorkspaceViewPreferences,
   WorkspaceSnapshot,
+  ZipImportRequest,
 } from "./models";
 
 export function createTauriSkillGateway(): SkillGateway {
@@ -80,5 +85,27 @@ export function createTauriSkillGateway(): SkillGateway {
         groupId,
         orderedInstanceIds,
       }),
+    async chooseZipFile() {
+      const selected = await open({
+        multiple: false,
+        title: "选择要导入的 Skill ZIP",
+        filters: [{ name: "ZIP 压缩包", extensions: ["zip"] }],
+      });
+      return !selected || Array.isArray(selected) ? null : selected;
+    },
+    planFileOperations: (request: FileOperationRequest) =>
+      invoke<FileOperationPlan>("plan_file_operations", { request }),
+    previewZipImport: (request: ZipImportRequest) =>
+      invoke<FileOperationPlan>("preview_zip_import", { request }),
+    executeFileOperationPlan: (planId) =>
+      invoke<FileOperationBatchOutcome>("execute_file_operation_plan", { planId }),
+    cancelFileOperationPlan: (planId) =>
+      invoke<void>("cancel_file_operation_plan", { planId }),
+    fileOperationHistory: () =>
+      invoke<FileOperationRecord[]>("file_operation_history"),
+    latestUndoableFileOperation: () =>
+      invoke<FileOperationRecord | null>("latest_undoable_file_operation"),
+    undoFileOperationBatch: (batchId) =>
+      invoke<WorkspaceSnapshot>("undo_file_operation_batch", { batchId }),
   };
 }

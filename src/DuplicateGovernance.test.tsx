@@ -73,6 +73,14 @@ describe("重复检查中心", () => {
       deleteSkillGroup: async () => ({ groups: [], instances: [] }),
       applySkillOrganizationChange: async () => ({ groups: [], instances: [] }),
       reorderSkillGroup: async () => ({ groups: [], instances: [] }),
+      chooseZipFile: async () => null,
+      planFileOperations: async () => ({ id: 1, kind: "copy", items: [], undoable: true }),
+      previewZipImport: async () => ({ id: 1, kind: "import", items: [], undoable: true }),
+      executeFileOperationPlan: async () => ({ batchId: 1, results: [], snapshot }),
+      cancelFileOperationPlan: async () => {},
+      fileOperationHistory: async () => [],
+      latestUndoableFileOperation: async () => null,
+      undoFileOperationBatch: async () => snapshot,
     };
 
     render(
