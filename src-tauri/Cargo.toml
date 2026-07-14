@@ -1,0 +1,19 @@
+[package]
+name = "skill-management-desktop"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[lib]
+name = "skill_management_desktop"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+skill-workspace = { path = "../crates/skill-workspace" }
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-dialog = "2.7.1"
