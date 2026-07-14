@@ -59,6 +59,50 @@ fn personal_user_validates_a_draft_and_previews_an_immutable_change_plan() {
             .iter()
             .any(|issue| issue.message.contains("路径不安全"))
     );
+    let reserved_path_alias = SkillDraft {
+        description: "有效描述。".to_owned(),
+        file_changes: vec![SkillFileDraftChange {
+            relative_path: "SKILL.md/".to_owned(),
+            operation: SkillFileDraftOperation::WriteText {
+                content: "绕过表单".to_owned(),
+            },
+        }],
+        ..invalid.clone()
+    };
+    let validation = workspace.validate_skill_draft(&reserved_path_alias);
+    assert!(!validation.valid);
+    assert!(
+        validation
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("元数据表单"))
+    );
+    let duplicate_path_aliases = SkillDraft {
+        description: "有效描述。".to_owned(),
+        file_changes: vec![
+            SkillFileDraftChange {
+                relative_path: "references//guide.md".to_owned(),
+                operation: SkillFileDraftOperation::WriteText {
+                    content: "第一份".to_owned(),
+                },
+            },
+            SkillFileDraftChange {
+                relative_path: "references/guide.md".to_owned(),
+                operation: SkillFileDraftOperation::WriteText {
+                    content: "第二份".to_owned(),
+                },
+            },
+        ],
+        ..invalid.clone()
+    };
+    let validation = workspace.validate_skill_draft(&duplicate_path_aliases);
+    assert!(!validation.valid);
+    assert!(
+        validation
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("重复修改"))
+    );
 
     let draft = SkillDraft {
         target: SkillDraftTarget::Existing { instance_id },

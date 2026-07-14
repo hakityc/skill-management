@@ -136,21 +136,25 @@ impl SkillWorkspace {
 
         let mut paths = HashSet::new();
         for change in &draft.file_changes {
-            if safe_relative_path(&change.relative_path).is_err() {
-                issues.push(validation_issue(
+            match safe_relative_path(&change.relative_path) {
+                Err(_) => issues.push(validation_issue(
                     "fileChanges",
                     format!("文件路径不安全：{}。", change.relative_path),
-                ));
-            } else if change.relative_path.eq_ignore_ascii_case("SKILL.md") {
-                issues.push(validation_issue(
-                    "fileChanges",
-                    "请通过元数据表单和 Markdown 编辑器修改 SKILL.md。",
-                ));
-            } else if !paths.insert(change.relative_path.clone()) {
-                issues.push(validation_issue(
-                    "fileChanges",
-                    format!("同一文件不能重复修改：{}。", change.relative_path),
-                ));
+                )),
+                Ok(path) => {
+                    let normalized = normalized_path(&path);
+                    if normalized.eq_ignore_ascii_case("SKILL.md") {
+                        issues.push(validation_issue(
+                            "fileChanges",
+                            "请通过元数据表单和 Markdown 编辑器修改 SKILL.md。",
+                        ));
+                    } else if !paths.insert(normalized) {
+                        issues.push(validation_issue(
+                            "fileChanges",
+                            format!("同一文件不能重复修改：{}。", change.relative_path),
+                        ));
+                    }
+                }
             }
         }
 
