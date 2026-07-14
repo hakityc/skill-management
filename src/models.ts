@@ -84,6 +84,31 @@ export interface WorkspaceSnapshot {
   instances: SkillInstance[];
 }
 
+export interface OrganizationSkillGroup {
+  id: number;
+  name: string;
+  instanceIds: string[];
+}
+
+export interface SkillInstanceOrganization {
+  instanceId: string;
+  tags: string[];
+  groupIds: number[];
+}
+
+export interface SkillOrganizationSnapshot {
+  groups: OrganizationSkillGroup[];
+  instances: SkillInstanceOrganization[];
+}
+
+export interface SkillOrganizationChange {
+  instanceIds: string[];
+  addTags: string[];
+  removeTags: string[];
+  addGroupIds: number[];
+  removeGroupIds: number[];
+}
+
 export type SkillFileKind = "directory" | "text" | "binary" | "symbolicLink";
 
 export interface SkillFileEntry {

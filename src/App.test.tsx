@@ -6,6 +6,7 @@ import { SkillManagerApp, type SkillGateway } from "./App";
 import type {
   SkillDetail,
   SkillDraft,
+  SkillOrganizationChange,
   SkillQuery,
   SkillWorkspaceViewPreferences,
   WorkspaceSnapshot,
@@ -37,6 +38,12 @@ const unavailableEditingMethods: Pick<
   | "saveDuplicateDecision"
   | "duplicateDecisions"
   | "restoreDuplicateDecision"
+  | "skillOrganization"
+  | "createSkillGroup"
+  | "renameSkillGroup"
+  | "deleteSkillGroup"
+  | "applySkillOrganizationChange"
+  | "reorderSkillGroup"
 > = {
   skillDetail: async () => {
     throw new Error("当前测试不读取详情");
@@ -57,6 +64,12 @@ const unavailableEditingMethods: Pick<
   saveDuplicateDecision: async () => {},
   duplicateDecisions: async () => [],
   restoreDuplicateDecision: async () => {},
+  skillOrganization: async () => ({ groups: [], instances: [] }),
+  createSkillGroup: async () => ({ groups: [], instances: [] }),
+  renameSkillGroup: async () => ({ groups: [], instances: [] }),
+  deleteSkillGroup: async () => ({ groups: [], instances: [] }),
+  applySkillOrganizationChange: async () => ({ groups: [], instances: [] }),
+  reorderSkillGroup: async () => ({ groups: [], instances: [] }),
 };
 
 describe("Skill 管理器", () => {
@@ -468,6 +481,12 @@ describe("Skill 管理器", () => {
       saveDuplicateDecision: async () => {},
       duplicateDecisions: async () => [],
       restoreDuplicateDecision: async () => {},
+      skillOrganization: async () => ({ groups: [], instances: [] }),
+      createSkillGroup: async () => ({ groups: [], instances: [] }),
+      renameSkillGroup: async () => ({ groups: [], instances: [] }),
+      deleteSkillGroup: async () => ({ groups: [], instances: [] }),
+      applySkillOrganizationChange: async () => ({ groups: [], instances: [] }),
+      reorderSkillGroup: async () => ({ groups: [], instances: [] }),
     };
 
     render(<SkillManagerApp gateway={gateway} />);
@@ -506,4 +525,98 @@ describe("Skill 管理器", () => {
     await userEvent.click(await screen.findByRole("button", { name: "撤销最近编辑" }));
     expect(undone).toBe(true);
   });
+
+  test("个人用户通过自动视图、Skill 组顺序和多选批量整理日常工作台", async () => {
+    const snapshot: WorkspaceSnapshot = {
+      authorizedRoot: "/Users/me/.codex/skills",
+      roots: [
+        { id: 1, path: "/Users/me/.codex/skills", status: "ready", error: null, recoveryHint: null },
+        { id: 2, path: "/Users/me/.claude/skills", status: "ready", error: null, recoveryHint: null },
+      ],
+      instances: [
+        testInstance("alpha", "alpha", 1, "codex", "exact"),
+        testInstance("beta", "beta", 2, "claude", "suspected"),
+        { ...testInstance("repair", "repair", 1, "codex", "none"), status: "needsRepair", error: "缺少描述" },
+      ],
+    };
+    const organization = {
+      groups: [{ id: 7, name: "发布流程", instanceIds: ["beta", "alpha"] }],
+      instances: [
+        { instanceId: "alpha", tags: ["常用"], groupIds: [7] },
+        { instanceId: "beta", tags: ["常用"], groupIds: [7] },
+      ],
+    };
+    let applied: SkillOrganizationChange | null = null;
+    const gateway: SkillGateway = {
+      ...unavailableEditingMethods,
+      loadSnapshot: async () => snapshot,
+      chooseAndAuthorizeRoot: async () => null,
+      rescanRoot: async () => snapshot,
+      removeRoot: async () => snapshot,
+      searchSkills: async () => ({ instances: snapshot.instances, total: 3 }),
+      loadViewPreferences: async () => defaultViewPreferences,
+      saveViewPreferences: async () => {},
+      skillOrganization: async () => organization,
+      async applySkillOrganizationChange(change) {
+        applied = change;
+        return organization;
+      },
+    };
+
+    render(<SkillManagerApp gateway={gateway} />);
+
+    expect(await screen.findByRole("button", { name: /Codex.*2/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Claude.*1/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /完全重复.*1/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /疑似重复.*1/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /需要修复.*1/ })).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: /发布流程.*2/ }));
+    expect(await screen.findByRole("heading", { name: "发布流程" })).toBeTruthy();
+    await waitFor(() => {
+      const rows = within(screen.getByRole("list", { name: "本地 Skill" })).getAllByRole("listitem");
+      expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
+        "beta，正常",
+        "alpha，正常",
+      ]);
+    });
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "选择 alpha" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "选择 beta" }));
+    await userEvent.click(screen.getByRole("button", { name: "批量整理" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "添加标签" }), "API，安全审计");
+    await userEvent.click(screen.getByRole("button", { name: "应用整理" }));
+    expect(applied).toEqual({
+      instanceIds: ["alpha", "beta"],
+      addTags: ["API", "安全审计"],
+      removeTags: [],
+      addGroupIds: [],
+      removeGroupIds: [],
+    });
+  });
 });
+
+function testInstance(
+  id: string,
+  name: string,
+  rootId: number,
+  client: "codex" | "claude",
+  duplicateCheckStatus: "none" | "exact" | "suspected",
+) {
+  return {
+    id,
+    rootId,
+    name,
+    description: `${name} description`,
+    relativePath: name,
+    skillFilePath: `/skills/${name}/SKILL.md`,
+    linkPath: null,
+    realPath: `/skills/${name}`,
+    status: "ready" as const,
+    error: null,
+    client,
+    duplicateCheckStatus,
+    createdAt: 1,
+    modifiedAt: 1,
+  };
+}

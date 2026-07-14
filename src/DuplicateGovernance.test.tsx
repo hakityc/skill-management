@@ -67,6 +67,12 @@ describe("重复检查中心", () => {
       async restoreDuplicateDecision(decisionId) {
         restoredDecisionId = decisionId;
       },
+      skillOrganization: async () => ({ groups: [], instances: [] }),
+      createSkillGroup: async () => ({ groups: [], instances: [] }),
+      renameSkillGroup: async () => ({ groups: [], instances: [] }),
+      deleteSkillGroup: async () => ({ groups: [], instances: [] }),
+      applySkillOrganizationChange: async () => ({ groups: [], instances: [] }),
+      reorderSkillGroup: async () => ({ groups: [], instances: [] }),
     };
 
     render(

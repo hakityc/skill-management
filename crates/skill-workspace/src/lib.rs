@@ -3,6 +3,7 @@
 mod detail;
 mod duplicate;
 mod edit;
+mod organization;
 
 pub use detail::{SkillDetail, SkillFileEntry, SkillFileKind, SkillFilePreview};
 pub use duplicate::{
@@ -15,6 +16,10 @@ pub use edit::{
     SkillChangeKind, SkillChangeOutcome, SkillChangePlan, SkillChangeRecord, SkillDraft,
     SkillDraftTarget, SkillDraftValidation, SkillFileDraftChange, SkillFileDraftOperation,
     SkillPlannedChange, SkillValidationIssue,
+};
+pub use organization::{
+    OrganizationSkillGroup, SkillInstanceOrganization, SkillOrganizationChange,
+    SkillOrganizationSnapshot,
 };
 
 use std::{
@@ -43,6 +48,10 @@ pub enum WorkspaceError {
     DraftMetadata(#[from] serde_yaml::Error),
     #[error("找不到 Skill 实例：{0}")]
     UnknownInstance(String),
+    #[error("找不到 Skill 组：{0}")]
+    UnknownSkillGroup(i64),
+    #[error("Skill 整理操作无效：{0}")]
+    InvalidOrganization(String),
     #[error("无法访问 Skill 文件：{0}")]
     InvalidSkillPath(String),
     #[error("Skill 草稿未通过校验：{0}")]
@@ -296,6 +305,7 @@ impl SkillWorkspace {
             ",
         )?;
         migrate_workspace_index(&connection)?;
+        organization::initialize_organization(&connection)?;
         drop(connection);
         let workspace = Self { database_path };
         workspace.recover_interrupted_changes()?;
@@ -345,6 +355,7 @@ impl SkillWorkspace {
         )?;
         delete_search_documents_for_root(&transaction, root_id)?;
         transaction.execute("DELETE FROM skill_instances WHERE root_id = ?1", [root_id])?;
+        organization::prune_orphaned_organization_records(&transaction)?;
         transaction.execute("DELETE FROM skill_roots WHERE id = ?1", [root_id])?;
         let replacement_root = transaction
             .query_row(
@@ -390,6 +401,7 @@ impl SkillWorkspace {
             delete_search_documents_for_root(&transaction, root_id)?;
             transaction.execute("DELETE FROM skill_instances WHERE root_id = ?1", [root_id])?;
             persist_instances(&transaction, &outcome.instances)?;
+            organization::prune_orphaned_organization_records(&transaction)?;
         }
         transaction.execute(
             "
@@ -487,6 +499,11 @@ impl SkillWorkspace {
                    OR relative_path LIKE ?1 ESCAPE '\\'
                    OR skill_file_path LIKE ?1 ESCAPE '\\'
                    OR real_path LIKE ?1 ESCAPE '\\'
+                   OR id IN (
+                       SELECT instance_id FROM skill_tags_and_groups
+                       WHERE tags LIKE ?1 ESCAPE '\\'
+                          OR skill_groups LIKE ?1 ESCAPE '\\'
+                   )
                 ",
                 [pattern],
             )?
@@ -573,36 +590,7 @@ impl SkillWorkspace {
         &self,
         updates: &[SkillTagsAndGroupsUpdate],
     ) -> Result<(), WorkspaceError> {
-        let mut connection = Connection::open(&self.database_path)?;
-        let transaction = connection.transaction()?;
-        for update in updates {
-            let exists = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM skill_instances WHERE id = ?1)",
-                [&update.instance_id],
-                |row| row.get::<_, bool>(0),
-            )?;
-            if !exists {
-                return Err(WorkspaceError::UnknownInstance(update.instance_id.clone()));
-            }
-            transaction.execute(
-                "
-                INSERT INTO skill_tags_and_groups (
-                    instance_id, tags, skill_groups
-                ) VALUES (?1, ?2, ?3)
-                ON CONFLICT(instance_id) DO UPDATE SET
-                    tags = excluded.tags,
-                    skill_groups = excluded.skill_groups
-                ",
-                params![
-                    update.instance_id,
-                    update.tags.join("\n"),
-                    update.skill_groups.join("\n"),
-                ],
-            )?;
-            rebuild_search_document(&transaction, &update.instance_id)?;
-        }
-        transaction.commit()?;
-        Ok(())
+        organization::replace_legacy_organization(self, updates)
     }
 }
 

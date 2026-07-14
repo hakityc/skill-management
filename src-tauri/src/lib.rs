@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use skill_workspace::{
     DuplicateDecisionKind, DuplicateDecisionRecord, DuplicateReview, SkillChangeOutcome,
     SkillChangePlan, SkillChangeRecord, SkillDetail, SkillDraft, SkillDraftValidation,
-    SkillFilePreview, SkillQuery, SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences,
-    WorkspaceSnapshot,
+    SkillFilePreview, SkillOrganizationChange, SkillOrganizationSnapshot, SkillQuery,
+    SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences, WorkspaceSnapshot,
 };
 use tauri::Manager;
 
@@ -202,6 +202,73 @@ fn restore_duplicate_decision(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn skill_organization(
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillOrganizationSnapshot, String> {
+    state
+        .workspace
+        .skill_organization()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_skill_group(
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillOrganizationSnapshot, String> {
+    state
+        .workspace
+        .create_skill_group(&name)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn rename_skill_group(
+    group_id: i64,
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillOrganizationSnapshot, String> {
+    state
+        .workspace
+        .rename_skill_group(group_id, &name)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_skill_group(
+    group_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillOrganizationSnapshot, String> {
+    state
+        .workspace
+        .delete_skill_group(group_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn apply_skill_organization_change(
+    change: SkillOrganizationChange,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillOrganizationSnapshot, String> {
+    state
+        .workspace
+        .apply_skill_organization_change(&change)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn reorder_skill_group(
+    group_id: i64,
+    ordered_instance_ids: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillOrganizationSnapshot, String> {
+    state
+        .workspace
+        .reorder_skill_group(group_id, &ordered_instance_ids)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -232,7 +299,13 @@ pub fn run() {
             review_duplicate_groups,
             save_duplicate_decision,
             duplicate_decisions,
-            restore_duplicate_decision
+            restore_duplicate_decision,
+            skill_organization,
+            create_skill_group,
+            rename_skill_group,
+            delete_skill_group,
+            apply_skill_organization_change,
+            reorder_skill_group
         ])
         .run(tauri::generate_context!())
         .expect("启动 Skill 管理器失败");

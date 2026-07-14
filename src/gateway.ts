@@ -14,6 +14,8 @@ import type {
   SkillDraft,
   SkillDraftValidation,
   SkillFilePreview,
+  SkillOrganizationChange,
+  SkillOrganizationSnapshot,
   SkillSearchResult,
   SkillWorkspaceViewPreferences,
   WorkspaceSnapshot,
@@ -63,5 +65,20 @@ export function createTauriSkillGateway(): SkillGateway {
       invoke<DuplicateDecisionRecord[]>("duplicate_decisions"),
     restoreDuplicateDecision: (decisionId) =>
       invoke<void>("restore_duplicate_decision", { decisionId }),
+    skillOrganization: () =>
+      invoke<SkillOrganizationSnapshot>("skill_organization"),
+    createSkillGroup: (name) =>
+      invoke<SkillOrganizationSnapshot>("create_skill_group", { name }),
+    renameSkillGroup: (groupId, name) =>
+      invoke<SkillOrganizationSnapshot>("rename_skill_group", { groupId, name }),
+    deleteSkillGroup: (groupId) =>
+      invoke<SkillOrganizationSnapshot>("delete_skill_group", { groupId }),
+    applySkillOrganizationChange: (change: SkillOrganizationChange) =>
+      invoke<SkillOrganizationSnapshot>("apply_skill_organization_change", { change }),
+    reorderSkillGroup: (groupId, orderedInstanceIds) =>
+      invoke<SkillOrganizationSnapshot>("reorder_skill_group", {
+        groupId,
+        orderedInstanceIds,
+      }),
   };
 }

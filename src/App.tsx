@@ -15,6 +15,8 @@ import type {
   SkillFilters,
   SkillFilePreview,
   SkillInstance,
+  SkillOrganizationChange,
+  SkillOrganizationSnapshot,
   SkillQuery,
   SkillRoot,
   SkillSearchResult,
@@ -23,6 +25,10 @@ import type {
   WorkspaceSnapshot,
 } from "./models";
 import { DuplicateGovernance } from "./DuplicateGovernance";
+import {
+  GroupManagementDialog,
+  OrganizationChangeDialog,
+} from "./SkillOrganization";
 import "./styles.css";
 
 export interface SkillGateway {
@@ -44,6 +50,17 @@ export interface SkillGateway {
   saveDuplicateDecision(instanceIds: string[], kind: DuplicateDecisionKind): Promise<void>;
   duplicateDecisions(): Promise<DuplicateDecisionRecord[]>;
   restoreDuplicateDecision(decisionId: number): Promise<void>;
+  skillOrganization(): Promise<SkillOrganizationSnapshot>;
+  createSkillGroup(name: string): Promise<SkillOrganizationSnapshot>;
+  renameSkillGroup(groupId: number, name: string): Promise<SkillOrganizationSnapshot>;
+  deleteSkillGroup(groupId: number): Promise<SkillOrganizationSnapshot>;
+  applySkillOrganizationChange(
+    change: SkillOrganizationChange,
+  ): Promise<SkillOrganizationSnapshot>;
+  reorderSkillGroup(
+    groupId: number,
+    orderedInstanceIds: string[],
+  ): Promise<SkillOrganizationSnapshot>;
 }
 
 interface SkillManagerAppProps {
@@ -224,6 +241,8 @@ const DEFAULT_VIEW_PREFERENCES: SkillWorkspaceViewPreferences = {
   density: "compact",
 };
 
+const EMPTY_ORGANIZATION: SkillOrganizationSnapshot = { groups: [], instances: [] };
+
 function SkillLibrary({
   gateway,
   snapshot,
@@ -258,6 +277,13 @@ function SkillLibrary({
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [lastOperationId, setLastOperationId] = useState<number | null>(null);
+  const [organization, setOrganization] = useState(EMPTY_ORGANIZATION);
+  const [organizationBusy, setOrganizationBusy] = useState(false);
+  const [organizationError, setOrganizationError] = useState<string | null>(null);
+  const [selectedOrganizationIds, setSelectedOrganizationIds] = useState<string[]>([]);
+  const [showOrganizationChange, setShowOrganizationChange] = useState(false);
+  const [showGroupManagement, setShowGroupManagement] = useState(false);
+  const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
   const repairCount = snapshot.instances.filter(
     (skill) => skill.status === "needsRepair",
   ).length;
@@ -265,6 +291,14 @@ function SkillLibrary({
     (skill) => skill.duplicateCheckStatus !== "none",
   ).length;
   const rootsById = new Map(snapshot.roots.map((root) => [root.id, root]));
+  const activeGroup = organization.groups.find((group) => group.id === activeGroupId) ?? null;
+  const selectedOrganizationInstances = snapshot.instances.filter((instance) =>
+    selectedOrganizationIds.includes(instance.id),
+  );
+  const tagCounts = organization.instances.reduce((counts, entry) => {
+    for (const tag of entry.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
 
   useEffect(() => {
     let active = true;
@@ -292,6 +326,21 @@ function SkillLibrary({
   }, [gateway, preferences, preferencesReady]);
 
   useEffect(() => {
+    let active = true;
+    gateway
+      .skillOrganization()
+      .then((nextOrganization) => {
+        if (active) setOrganization(nextOrganization);
+      })
+      .catch((reason: unknown) => {
+        if (active) setOrganizationError(readableError(reason));
+      });
+    return () => {
+      active = false;
+    };
+  }, [gateway, snapshot.instances]);
+
+  useEffect(() => {
     if (!preferencesReady) return;
     let active = true;
     setSearching(true);
@@ -304,8 +353,21 @@ function SkillLibrary({
         })
         .then((result) => {
           if (!active) return;
-          setInstances(result.instances);
-          setTotal(result.total);
+          let visibleInstances = result.instances;
+          if (activeGroup) {
+            const position = new Map(
+              activeGroup.instanceIds.map((instanceId, index) => [instanceId, index]),
+            );
+            visibleInstances = visibleInstances
+              .filter((instance) => position.has(instance.id))
+              .sort(
+                (left, right) =>
+                  (position.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+                  (position.get(right.id) ?? Number.MAX_SAFE_INTEGER),
+              );
+          }
+          setInstances(visibleInstances);
+          setTotal(visibleInstances.length);
           setSearchError(null);
         })
         .catch((reason: unknown) => {
@@ -319,7 +381,24 @@ function SkillLibrary({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [gateway, preferences.filters, preferences.sort, preferencesReady, queryText, snapshot]);
+  }, [
+    activeGroup,
+    gateway,
+    preferences.filters,
+    preferences.sort,
+    preferencesReady,
+    queryText,
+    snapshot,
+  ]);
+
+  useEffect(() => {
+    setSelectedOrganizationIds((current) =>
+      current.filter((id) => snapshot.instances.some((instance) => instance.id === id)),
+    );
+    if (activeGroupId !== null && !organization.groups.some((group) => group.id === activeGroupId)) {
+      setActiveGroupId(null);
+    }
+  }, [activeGroupId, organization.groups, snapshot.instances]);
 
   useEffect(() => {
     if (selectedInstanceId && snapshot.instances.some((skill) => skill.id === selectedInstanceId)) {
@@ -368,7 +447,7 @@ function SkillLibrary({
     return () => {
       active = false;
     };
-  }, [gateway, selectedInstanceId, snapshot]);
+  }, [gateway, organization, selectedInstanceId, snapshot]);
 
   async function previewFile(relativePath: string) {
     if (!selectedInstanceId) return;
@@ -503,12 +582,64 @@ function SkillLibrary({
     setPreferences((current) => ({ ...current, sort: { field, direction } }));
   }
 
+  function showAutomaticView(filters: SkillFilters) {
+    setActiveGroupId(null);
+    setQueryText("");
+    updateFilters(filters);
+  }
+
+  function showSkillGroup(groupId: number) {
+    setActiveGroupId(groupId);
+    setQueryText("");
+    updateFilters(EMPTY_FILTERS);
+  }
+
+  async function updateOrganization(
+    action: () => Promise<SkillOrganizationSnapshot>,
+  ) {
+    setOrganizationBusy(true);
+    setOrganizationError(null);
+    try {
+      const nextOrganization = await action();
+      setOrganization(nextOrganization);
+      return nextOrganization;
+    } catch (reason) {
+      setOrganizationError(readableError(reason));
+      return null;
+    } finally {
+      setOrganizationBusy(false);
+    }
+  }
+
+  async function applyOrganizationChange(change: SkillOrganizationChange) {
+    const next = await updateOrganization(() =>
+      gateway.applySkillOrganizationChange(change),
+    );
+    if (next) {
+      setShowOrganizationChange(false);
+      setSelectedOrganizationIds([]);
+    }
+  }
+
+  const viewTitle = activeGroup
+    ? activeGroup.name
+    : preferences.filters.clients[0]
+      ? `${skillClientName(preferences.filters.clients[0])} Skills`
+      : preferences.filters.rootIds[0]
+        ? shortRoot(rootsById.get(preferences.filters.rootIds[0])?.path ?? "Skill 根目录")
+        : preferences.filters.repairStatus === "needsRepair"
+          ? "需要修复"
+          : preferences.filters.duplicateCheckStatuses[0]
+            ? duplicateCheckStatusName(preferences.filters.duplicateCheckStatuses[0])
+            : "全部 Skill";
+
   const hasConditions =
     queryText.length > 0 ||
     preferences.filters.clients.length > 0 ||
     preferences.filters.rootIds.length > 0 ||
     preferences.filters.repairStatus !== "any" ||
-    preferences.filters.duplicateCheckStatuses.length > 0;
+    preferences.filters.duplicateCheckStatuses.length > 0 ||
+    activeGroupId !== null;
   const resultStatus = searching
     ? "正在检索…"
     : queryText
@@ -518,31 +649,120 @@ function SkillLibrary({
   return (
     <main className="library-page">
       <aside className="library-sidebar">
-        <p className="eyebrow">资料库</p>
+        <p className="eyebrow">自动视图</p>
         <button
-          className={preferences.filters.repairStatus === "any" ? "nav-item active" : "nav-item"}
-          onClick={() => updateSingleFilter("repairStatus", "any")}
+          className={
+            activeGroupId === null && !queryText && preferences.filters.clients.length === 0 &&
+            preferences.filters.rootIds.length === 0 && preferences.filters.repairStatus === "any" &&
+            preferences.filters.duplicateCheckStatuses.length === 0
+              ? "nav-item active"
+              : "nav-item"
+          }
+          onClick={() => showAutomaticView(EMPTY_FILTERS)}
         >
           <span>全部 Skill</span>
           <b>{snapshot.instances.length}</b>
         </button>
         <button
           className={
-            preferences.filters.repairStatus === "needsRepair" ? "nav-item active" : "nav-item"
+            activeGroupId === null && preferences.filters.repairStatus === "needsRepair"
+              ? "nav-item active"
+              : "nav-item"
           }
-          onClick={() => updateSingleFilter("repairStatus", "needsRepair")}
+          onClick={() =>
+            showAutomaticView({ ...EMPTY_FILTERS, repairStatus: "needsRepair" })
+          }
         >
           <span>需要修复</span>
           <b>{repairCount}</b>
-        </button>
-        <button className="nav-item" aria-label="管理根目录" onClick={onManageRoots}>
-          <span>管理根目录</span>
-          <b>{snapshot.roots.length}</b>
         </button>
         <button className="nav-item" aria-label="重复检查" onClick={onReviewDuplicates}>
           <span>重复检查</span>
           <b>{duplicateCount}</b>
         </button>
+        <div className="sidebar-view-block">
+          <small>重复检查状态</small>
+          {(["exact", "suspected", "nameConflict"] as DuplicateCheckStatus[]).map((status) => {
+            const count = snapshot.instances.filter(
+              (instance) => instance.duplicateCheckStatus === status,
+            ).length;
+            return (
+              <button
+                className={
+                  preferences.filters.duplicateCheckStatuses[0] === status
+                    ? "nav-item active"
+                    : "nav-item"
+                }
+                key={status}
+                onClick={() =>
+                  showAutomaticView({ ...EMPTY_FILTERS, duplicateCheckStatuses: [status] })
+                }
+              >
+                <span>{duplicateCheckStatusName(status)}</span><b>{count}</b>
+              </button>
+            );
+          })}
+        </div>
+        <div className="sidebar-view-block">
+          <small>Skill 客户端</small>
+          {(["claude", "codex", "gemini", "openCode", "hermes", "other"] as SkillClient[])
+            .map((client) => ({
+              client,
+              count: snapshot.instances.filter((instance) => instance.client === client).length,
+            }))
+            .filter(({ count }) => count > 0)
+            .map(({ client, count }) => (
+              <button
+                className={preferences.filters.clients[0] === client ? "nav-item active" : "nav-item"}
+                key={client}
+                onClick={() => showAutomaticView({ ...EMPTY_FILTERS, clients: [client] })}
+              >
+                <span>{skillClientName(client)}</span><b>{count}</b>
+              </button>
+            ))}
+        </div>
+        <div className="sidebar-view-block">
+          <small>Skill 根目录</small>
+          {snapshot.roots.map((root) => (
+            <button
+              className={preferences.filters.rootIds[0] === root.id ? "nav-item active" : "nav-item"}
+              key={root.id}
+              title={root.path}
+              onClick={() => showAutomaticView({ ...EMPTY_FILTERS, rootIds: [root.id] })}
+            >
+              <span>{shortRoot(root.path)}</span>
+              <b>{snapshot.instances.filter((instance) => instance.rootId === root.id).length}</b>
+            </button>
+          ))}
+          <button className="sidebar-text-action" aria-label="管理根目录" onClick={onManageRoots}>
+            管理 Skill 根目录
+          </button>
+        </div>
+        <div className="sidebar-view-block">
+          <small>Skill 组</small>
+          {organization.groups.map((group) => (
+            <button
+              className={activeGroupId === group.id ? "nav-item active" : "nav-item"}
+              key={group.id}
+              onClick={() => showSkillGroup(group.id)}
+            >
+              <span>{group.name}</span><b>{group.instanceIds.length}</b>
+            </button>
+          ))}
+          <button className="sidebar-text-action" onClick={() => setShowGroupManagement(true)}>
+            管理 Skill 组
+          </button>
+        </div>
+        {tagCounts.size > 0 ? (
+          <div className="sidebar-view-block">
+            <small>Skill 标签</small>
+            {[...tagCounts.entries()].sort(([left], [right]) => left.localeCompare(right, "zh-CN")).map(([tag, count]) => (
+              <button className={queryText === tag ? "nav-item active" : "nav-item"} key={tag} onClick={() => { setActiveGroupId(null); updateFilters(EMPTY_FILTERS); setQueryText(tag); }}>
+                <span>#{tag}</span><b>{count}</b>
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="root-card">
           <span>当前根目录</span>
           <code>{snapshot.authorizedRoot}</code>
@@ -553,7 +773,7 @@ function SkillLibrary({
         <div className="library-title">
           <div>
             <p className="eyebrow">本地资料库</p>
-            <h1>全部 Skill</h1>
+            <h1>{viewTitle}</h1>
           </div>
           <div className="library-title-actions">
             <span className="scan-status" aria-live="polite">
@@ -673,6 +893,17 @@ function SkillLibrary({
           ) : null}
         </div>
         {searchError ? <p className="search-error">检索失败：{searchError}</p> : null}
+        {selectedOrganizationIds.length > 0 ? (
+          <div className="bulk-organization-bar">
+            <span>已选择 {selectedOrganizationIds.length} 个 Skill 实例</span>
+            <button className="primary-button compact" onClick={() => setShowOrganizationChange(true)}>
+              批量整理
+            </button>
+            <button className="secondary-button compact" onClick={() => setSelectedOrganizationIds([])}>
+              取消选择
+            </button>
+          </div>
+        ) : null}
         <div className="catalog-workspace">
           <div className={`table-shell ${preferences.density}`}>
             <div className="table-header" aria-hidden="true">
@@ -688,7 +919,15 @@ function SkillLibrary({
                     skill={skill}
                     root={rootsById.get(skill.rootId)}
                     selected={skill.id === selectedInstanceId}
+                    checked={selectedOrganizationIds.includes(skill.id)}
                     onSelect={() => setSelectedInstanceId(skill.id)}
+                    onToggleChecked={() =>
+                      setSelectedOrganizationIds((current) =>
+                        current.includes(skill.id)
+                          ? current.filter((id) => id !== skill.id)
+                          : [...current, skill.id],
+                      )
+                    }
                   />
                 ))}
               </ul>
@@ -707,6 +946,11 @@ function SkillLibrary({
             busy={editBusy}
             onPreview={previewFile}
             onEdit={() => openExistingEditor()}
+            onOrganize={() => {
+              if (!selectedInstanceId) return;
+              setSelectedOrganizationIds([selectedInstanceId]);
+              setShowOrganizationChange(true);
+            }}
             onEditText={(path, content) =>
               openExistingEditor({
                 relativePath: path,
@@ -741,6 +985,36 @@ function SkillLibrary({
           onClose={() => setEditorDraft(null)}
           onPreviewChanges={previewChanges}
           onConfirm={confirmChanges}
+        />
+      ) : null}
+      {showOrganizationChange && selectedOrganizationInstances.length > 0 ? (
+        <OrganizationChangeDialog
+          organization={organization}
+          selectedInstances={selectedOrganizationInstances}
+          busy={organizationBusy}
+          error={organizationError}
+          onClose={() => setShowOrganizationChange(false)}
+          onApply={applyOrganizationChange}
+        />
+      ) : null}
+      {showGroupManagement ? (
+        <GroupManagementDialog
+          organization={organization}
+          instances={snapshot.instances}
+          busy={organizationBusy}
+          error={organizationError}
+          onClose={() => setShowGroupManagement(false)}
+          onCreate={(name) => updateOrganization(() => gateway.createSkillGroup(name))}
+          onRename={(groupId, name) =>
+            updateOrganization(() => gateway.renameSkillGroup(groupId, name))
+          }
+          onDelete={async (groupId) => {
+            const next = await updateOrganization(() => gateway.deleteSkillGroup(groupId));
+            if (next && activeGroupId === groupId) setActiveGroupId(null);
+          }}
+          onReorder={(groupId, orderedInstanceIds) =>
+            updateOrganization(() => gateway.reorderSkillGroup(groupId, orderedInstanceIds))
+          }
         />
       ) : null}
     </main>
@@ -927,12 +1201,16 @@ function SkillRow({
   skill,
   root,
   selected,
+  checked,
   onSelect,
+  onToggleChecked,
 }: {
   skill: SkillInstance;
   root?: SkillRoot;
   selected: boolean;
+  checked: boolean;
   onSelect(): void;
+  onToggleChecked(): void;
 }) {
   const needsRepair = skill.status === "needsRepair";
   return (
@@ -946,6 +1224,14 @@ function SkillRow({
         if (event.key === "Enter" || event.key === " ") onSelect();
       }}
     >
+      <input
+        className="skill-select-checkbox"
+        type="checkbox"
+        aria-label={`选择 ${skill.name}`}
+        checked={checked}
+        onClick={(event) => event.stopPropagation()}
+        onChange={onToggleChecked}
+      />
       <span className="file-spine" aria-hidden="true" />
       <span className="skill-copy">
         <strong>{skill.name}</strong>
@@ -975,6 +1261,7 @@ function SkillDetailPanel({
   busy,
   onPreview,
   onEdit,
+  onOrganize,
   onEditText,
   onDelete,
   onReplaceBinary,
@@ -986,6 +1273,7 @@ function SkillDetailPanel({
   busy: boolean;
   onPreview(relativePath: string): void;
   onEdit(): void;
+  onOrganize(): void;
   onEditText(relativePath: string, content: string): void;
   onDelete(relativePath: string): void;
   onReplaceBinary(relativePath: string, content: number[]): void;
@@ -1004,9 +1292,14 @@ function SkillDetailPanel({
           <p className="eyebrow">Skill 详情</p>
           <h2>{detail.instance.name}</h2>
         </div>
-        <button className="primary-button compact" onClick={onEdit} disabled={busy}>
-          编辑 Skill
-        </button>
+        <div className="detail-heading-actions">
+          <button className="secondary-button compact" onClick={onOrganize} disabled={busy}>
+            整理
+          </button>
+          <button className="primary-button compact" onClick={onEdit} disabled={busy}>
+            编辑 Skill
+          </button>
+        </div>
       </div>
       <p className="detail-description">{detail.instance.description || "暂无描述"}</p>
       <dl className="detail-metadata">
@@ -1308,6 +1601,15 @@ function skillClientName(client: SkillClient) {
     hermes: "Hermes",
     other: "自定义",
   }[client];
+}
+
+function duplicateCheckStatusName(status: DuplicateCheckStatus) {
+  return {
+    none: "未发现相关实例",
+    exact: "完全重复",
+    suspected: "疑似重复",
+    nameConflict: "同名冲突",
+  }[status];
 }
 
 function formatTimestamp(value: number) {
