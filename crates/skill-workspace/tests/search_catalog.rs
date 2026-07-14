@@ -5,8 +5,8 @@ use std::{
 
 use skill_workspace::{
     DuplicateCheckStatus, DuplicateCheckStatusUpdate, SkillClient, SkillFilters, SkillListDensity,
-    SkillOrganizationSearchTermsUpdate, SkillQuery, SkillRepairFilter, SkillSort,
-    SkillSortDirection, SkillSortField, SkillWorkspace, SkillWorkspaceViewPreferences,
+    SkillQuery, SkillRepairFilter, SkillSort, SkillSortDirection, SkillSortField,
+    SkillTagsAndGroupsUpdate, SkillWorkspace, SkillWorkspaceViewPreferences,
 };
 use tempfile::tempdir;
 
@@ -56,7 +56,7 @@ fn personal_user_searches_name_description_body_and_path_after_content_changes()
 }
 
 #[test]
-fn personal_user_combines_client_root_repair_and_duplicate_check_filters() {
+fn personal_user_combines_skill_client_root_needs_repair_and_duplicate_check_filters() {
     let sandbox = tempdir().expect("创建临时工作区");
     let codex_root = sandbox.path().join(".codex/skills");
     let claude_root = sandbox.path().join(".claude/skills");
@@ -66,8 +66,8 @@ fn personal_user_combines_client_root_repair_and_duplicate_check_filters() {
         "可正常使用。",
         "Codex 内容。",
     );
-    write_repairable_skill(&codex_root.join("broken-codex"));
-    write_repairable_skill(&claude_root.join("broken-claude"));
+    write_skill_needing_repair(&codex_root.join("broken-codex"));
+    write_skill_needing_repair(&claude_root.join("broken-claude"));
     let workspace =
         SkillWorkspace::open(sandbox.path().join("index.sqlite3")).expect("打开 SkillWorkspace");
     let codex_root_id = workspace
@@ -329,7 +329,7 @@ fn thousand_instance_catalog_keeps_common_search_and_filter_within_baseline() {
     }
     let elapsed = started.elapsed();
     eprintln!(
-        "1000 个实例，30 次检索/筛选总耗时 {:?}，平均 {:?}",
+        "1000 个 Skill 实例，30 次检索/筛选总耗时 {:?}，平均 {:?}",
         elapsed,
         elapsed / 30
     );
@@ -381,7 +381,7 @@ fn upgraded_legacy_catalog_rebuilds_search_after_instance_ids_are_migrated() {
 }
 
 #[test]
-fn organization_terms_participate_in_search_after_restart_and_rescan() {
+fn skill_tags_and_groups_participate_in_search_after_restart_and_rescan() {
     let sandbox = tempdir().expect("创建临时工作区");
     let root = sandbox.path().join("skills");
     let database_path = sandbox.path().join("index.sqlite3");
@@ -394,12 +394,12 @@ fn organization_terms_participate_in_search_after_restart_and_rescan() {
     let workspace = SkillWorkspace::open(&database_path).expect("打开 SkillWorkspace");
     let snapshot = workspace.add_root(&root).expect("扫描根目录");
     workspace
-        .save_organization_search_terms(&[SkillOrganizationSearchTermsUpdate {
+        .save_skill_tags_and_groups(&[SkillTagsAndGroupsUpdate {
             instance_id: snapshot.instances[0].id.clone(),
             tags: vec!["安全审计".to_owned(), "API".to_owned()],
             skill_groups: vec!["支付项目".to_owned()],
         }])
-        .expect("保存组织检索词");
+        .expect("保存 Skill 标签与 Skill 组");
 
     assert_names(&workspace, "安全审计", &["api-review"]);
     assert_names(&workspace, "支付项目", &["api-review"]);
@@ -473,7 +473,7 @@ fn write_skill(directory: &std::path::Path, name: &str, description: &str, body:
     .expect("写入 SKILL.md");
 }
 
-fn write_repairable_skill(directory: &std::path::Path) {
+fn write_skill_needing_repair(directory: &std::path::Path) {
     fs::create_dir_all(directory).expect("创建需要修复的 Skill 目录");
     fs::write(directory.join("SKILL.md"), "# 缺少 frontmatter\n").expect("写入需要修复的 SKILL.md");
 }

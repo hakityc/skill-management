@@ -167,7 +167,7 @@ pub struct DuplicateCheckStatusUpdate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SkillOrganizationSearchTermsUpdate {
+pub struct SkillTagsAndGroupsUpdate {
     pub instance_id: String,
     pub tags: Vec<String>,
     pub skill_groups: Vec<String>,
@@ -233,7 +233,7 @@ impl SkillWorkspace {
                 modified_at INTEGER NOT NULL DEFAULT 0,
                 search_document TEXT NOT NULL DEFAULT ''
             );
-            CREATE TABLE IF NOT EXISTS skill_organization_search_terms (
+            CREATE TABLE IF NOT EXISTS skill_tags_and_groups (
                 instance_id TEXT PRIMARY KEY,
                 tags TEXT NOT NULL DEFAULT '',
                 skill_groups TEXT NOT NULL DEFAULT ''
@@ -280,7 +280,7 @@ impl SkillWorkspace {
         let transaction = connection.transaction()?;
         transaction.execute(
             "
-            DELETE FROM skill_organization_search_terms
+            DELETE FROM skill_tags_and_groups
             WHERE instance_id IN (SELECT id FROM skill_instances WHERE root_id = ?1)
             ",
             [root_id],
@@ -392,10 +392,7 @@ impl SkillWorkspace {
         let instances = query_instances(
             &connection,
             "
-            SELECT id, root_id, name, description, relative_path, skill_file_path,
-                   link_path, real_path, status, error, client, duplicate_check_status,
-                   created_at, modified_at, search_document
-            FROM skill_instances
+            SELECT * FROM skill_instance_catalog
             ORDER BY root_id, relative_path
             ",
             [],
@@ -415,10 +412,7 @@ impl SkillWorkspace {
             query_instances(
                 &connection,
                 "
-                SELECT id, root_id, name, description, relative_path, skill_file_path,
-                       link_path, real_path, status, error, client, duplicate_check_status,
-                       created_at, modified_at, search_document
-                FROM skill_instances
+                SELECT * FROM skill_instance_catalog
                 ORDER BY name COLLATE NOCASE, relative_path
                 ",
                 [],
@@ -428,10 +422,7 @@ impl SkillWorkspace {
             query_instances(
                 &connection,
                 "
-                SELECT id, root_id, name, description, relative_path, skill_file_path,
-                       link_path, real_path, status, error, client, duplicate_check_status,
-                       created_at, modified_at, search_document
-                FROM skill_instances
+                SELECT * FROM skill_instance_catalog
                 WHERE name LIKE ?1 ESCAPE '\\'
                    OR description LIKE ?1 ESCAPE '\\'
                    OR search_document LIKE ?1 ESCAPE '\\'
@@ -446,18 +437,12 @@ impl SkillWorkspace {
             query_instances(
                 &connection,
                 "
-                SELECT skill_instances.id, skill_instances.root_id, skill_instances.name,
-                       skill_instances.description, skill_instances.relative_path,
-                       skill_instances.skill_file_path, skill_instances.link_path,
-                       skill_instances.real_path, skill_instances.status,
-                       skill_instances.error, skill_instances.client,
-                       skill_instances.duplicate_check_status, skill_instances.created_at,
-                       skill_instances.modified_at, skill_instances.search_document
-                FROM skill_instances
-                JOIN skill_search ON skill_search.instance_id = skill_instances.id
+                SELECT skill_instance_catalog.*
+                FROM skill_instance_catalog
+                JOIN skill_search ON skill_search.instance_id = skill_instance_catalog.id
                 WHERE skill_search MATCH ?1
-                ORDER BY rank, skill_instances.name COLLATE NOCASE,
-                         skill_instances.relative_path
+                ORDER BY rank, skill_instance_catalog.name COLLATE NOCASE,
+                         skill_instance_catalog.relative_path
                 ",
                 [search_expression],
             )?
@@ -526,9 +511,9 @@ impl SkillWorkspace {
         Ok(())
     }
 
-    pub fn save_organization_search_terms(
+    pub fn save_skill_tags_and_groups(
         &self,
-        updates: &[SkillOrganizationSearchTermsUpdate],
+        updates: &[SkillTagsAndGroupsUpdate],
     ) -> Result<(), WorkspaceError> {
         let mut connection = Connection::open(&self.database_path)?;
         let transaction = connection.transaction()?;
@@ -543,7 +528,7 @@ impl SkillWorkspace {
             }
             transaction.execute(
                 "
-                INSERT INTO skill_organization_search_terms (
+                INSERT INTO skill_tags_and_groups (
                     instance_id, tags, skill_groups
                 ) VALUES (?1, ?2, ?3)
                 ON CONFLICT(instance_id) DO UPDATE SET
@@ -756,6 +741,16 @@ fn migrate_workspace_index(connection: &Connection) -> Result<(), WorkspaceError
             [],
         )?;
     }
+    connection.execute_batch(
+        "
+        DROP VIEW IF EXISTS skill_instance_catalog;
+        CREATE VIEW skill_instance_catalog AS
+        SELECT id, root_id, name, description, relative_path, skill_file_path,
+               link_path, real_path, status, error, client, duplicate_check_status,
+               created_at, modified_at, search_document
+        FROM skill_instances;
+        ",
+    )?;
 
     let root_columns = {
         let mut statement = connection.prepare("PRAGMA table_info(skill_roots)")?;
@@ -835,11 +830,11 @@ fn migrate_workspace_index(connection: &Connection) -> Result<(), WorkspaceError
         )
         SELECT skill_instances.id, name, description, search_document,
                relative_path || ' ' || skill_file_path || ' ' || real_path,
-               COALESCE(skill_organization_search_terms.tags, ''),
-               COALESCE(skill_organization_search_terms.skill_groups, '')
+               COALESCE(skill_tags_and_groups.tags, ''),
+               COALESCE(skill_tags_and_groups.skill_groups, '')
         FROM skill_instances
-        LEFT JOIN skill_organization_search_terms
-          ON skill_organization_search_terms.instance_id = skill_instances.id;
+        LEFT JOIN skill_tags_and_groups
+          ON skill_tags_and_groups.instance_id = skill_instances.id;
         ",
     )?;
     Ok(())
@@ -886,10 +881,10 @@ fn persist_instances(
             VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 COALESCE((
-                    SELECT tags FROM skill_organization_search_terms WHERE instance_id = ?1
+                    SELECT tags FROM skill_tags_and_groups WHERE instance_id = ?1
                 ), ''),
                 COALESCE((
-                    SELECT skill_groups FROM skill_organization_search_terms WHERE instance_id = ?1
+                    SELECT skill_groups FROM skill_tags_and_groups WHERE instance_id = ?1
                 ), '')
             )
             ",
@@ -937,11 +932,11 @@ fn rebuild_search_document(
         )
         SELECT skill_instances.id, name, description, search_document,
                relative_path || ' ' || skill_file_path || ' ' || real_path,
-               COALESCE(skill_organization_search_terms.tags, ''),
-               COALESCE(skill_organization_search_terms.skill_groups, '')
+               COALESCE(skill_tags_and_groups.tags, ''),
+               COALESCE(skill_tags_and_groups.skill_groups, '')
         FROM skill_instances
-        LEFT JOIN skill_organization_search_terms
-          ON skill_organization_search_terms.instance_id = skill_instances.id
+        LEFT JOIN skill_tags_and_groups
+          ON skill_tags_and_groups.instance_id = skill_instances.id
         WHERE skill_instances.id = ?1
         ",
         [instance_id],

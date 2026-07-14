@@ -299,7 +299,7 @@ function SkillLibrary({
     ? "正在检索…"
     : queryText
       ? `检索“${queryText}” · ${total} 个结果`
-      : `${total} 个实例`;
+      : `${total} 个 Skill 实例`;
 
   return (
     <main className="library-page">
