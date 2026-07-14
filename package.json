@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:app": "tauri build",
-    "check": "npm run check:local-only && npm run check:ui-contract && npm run typecheck && npm test && cargo test --workspace && cargo clippy --workspace --all-targets --all-features -- -D warnings && npm run build",
+    "check": "npm run check:local-only && npm run check:ui-contract && npm run typecheck && npm test && cargo test --workspace && npm run build && cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "check:local-only": "node scripts/verify-local-only.mjs",
     "check:ui-contract": "node scripts/verify-ui-contract.mjs",
     "typecheck": "tsc --noEmit",

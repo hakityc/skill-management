@@ -39,9 +39,9 @@ jobs:
         run: npm test
       - name: 运行 Rust 测试
         run: cargo test --workspace
-      - name: 运行 Rust 静态检查
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: 构建生产前端
         run: npm run build
+      - name: 运行 Rust 静态检查
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: 构建 macOS 应用
         run: npm run build:app
