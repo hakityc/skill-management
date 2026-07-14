@@ -25,8 +25,8 @@ const organization: SkillOrganizationSnapshot = {
   ],
 };
 
-describe("Skill 组与标签整理", () => {
-  test("个人用户批量添加和移除多个标签与 Skill 组", async () => {
+describe("Skill 组与 Skill 标签整理", () => {
+  test("个人用户批量添加和移除多个 Skill 标签与 Skill 组", async () => {
     let submitted: SkillOrganizationChange | null = null;
     render(
       <OrganizationChangeDialog
@@ -42,8 +42,8 @@ describe("Skill 组与标签整理", () => {
     );
 
     expect(screen.getByRole("heading", { name: "整理 2 个 Skill 实例" })).toBeTruthy();
-    await userEvent.type(screen.getByRole("textbox", { name: "添加标签" }), "API，安全审计");
-    await userEvent.click(screen.getByRole("checkbox", { name: "移除标签 常用" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "添加 Skill 标签" }), "API，安全审计");
+    await userEvent.click(screen.getByRole("checkbox", { name: "移除 Skill 标签 常用" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Skill 组 发布流程" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Skill 组 安全审查" }));
     await userEvent.click(screen.getByRole("button", { name: "应用整理" }));
@@ -54,6 +54,34 @@ describe("Skill 组与标签整理", () => {
       removeTags: ["常用"],
       addGroupIds: [2],
       removeGroupIds: [1],
+    });
+  });
+
+  test("部分实例已在 Skill 组时，未触碰该组会保持原成员关系", async () => {
+    let submitted: SkillOrganizationChange | null = null;
+    render(
+      <OrganizationChangeDialog
+        organization={organization}
+        selectedInstances={[skill("alpha", "alpha"), skill("beta", "beta")]}
+        busy={false}
+        error={null}
+        onClose={() => {}}
+        onApply={(change) => {
+          submitted = change;
+        }}
+      />,
+    );
+
+    expect(screen.getByText("部分已加入")).toBeTruthy();
+    await userEvent.type(screen.getByRole("textbox", { name: "添加 Skill 标签" }), "工作台");
+    await userEvent.click(screen.getByRole("button", { name: "应用整理" }));
+
+    expect(submitted).toEqual({
+      instanceIds: ["alpha", "beta"],
+      addTags: ["工作台"],
+      removeTags: [],
+      addGroupIds: [],
+      removeGroupIds: [],
     });
   });
 

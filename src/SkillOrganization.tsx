@@ -42,6 +42,7 @@ export function OrganizationChangeDialog({
     .filter((group) => selectedIds.some((id) => group.instanceIds.includes(id)))
     .map((group) => group.id);
   const [targetGroupIds, setTargetGroupIds] = useState(allGroupIds);
+  const [touchedGroupIds, setTouchedGroupIds] = useState<number[]>([]);
   const [addTagsText, setAddTagsText] = useState("");
   const [removeTags, setRemoveTags] = useState<string[]>([]);
   const existingTags = useMemo(
@@ -50,6 +51,9 @@ export function OrganizationChangeDialog({
   );
 
   function toggleGroup(groupId: number) {
+    setTouchedGroupIds((current) =>
+      current.includes(groupId) ? current : [...current, groupId],
+    );
     setTargetGroupIds((current) =>
       current.includes(groupId)
         ? current.filter((id) => id !== groupId)
@@ -68,23 +72,27 @@ export function OrganizationChangeDialog({
       instanceIds: selectedIds,
       addTags,
       removeTags,
-      addGroupIds: targetGroupIds.filter((id) => !allGroupIds.includes(id)),
-      removeGroupIds: anyGroupIds.filter((id) => !targetGroupIds.includes(id)),
+      addGroupIds: targetGroupIds.filter(
+        (id) => touchedGroupIds.includes(id) && !allGroupIds.includes(id),
+      ),
+      removeGroupIds: anyGroupIds.filter(
+        (id) => touchedGroupIds.includes(id) && !targetGroupIds.includes(id),
+      ),
     });
   }
 
   return (
     <DialogShell title={`整理 ${selectedIds.length} 个 Skill 实例`} onClose={onClose}>
       <p className="organization-dialog-copy">
-        Skill 组、标签和顺序只保存在本机，不会移动或修改真实 Skill 文件。
+        Skill 组、Skill 标签和顺序只保存在本机，不会移动或修改真实 Skill 文件。
       </p>
       {error ? <p className="organization-error" role="alert">整理失败：{error}</p> : null}
       <section className="organization-form-section">
-        <h3>添加多个标签</h3>
+        <h3>添加多个 Skill 标签</h3>
         <label>
-          <span>添加标签</span>
+          <span>添加 Skill 标签</span>
           <textarea
-            aria-label="添加标签"
+            aria-label="添加 Skill 标签"
             placeholder="用逗号分隔，例如：API，常用，安全审计"
             value={addTagsText}
             onChange={(event) => setAddTagsText(event.target.value)}
@@ -92,13 +100,13 @@ export function OrganizationChangeDialog({
         </label>
       </section>
       <section className="organization-form-section">
-        <h3>移除已有标签</h3>
+        <h3>移除已有 Skill 标签</h3>
         <div className="organization-check-grid">
           {existingTags.map((tag) => (
             <label key={tag}>
               <input
                 type="checkbox"
-                aria-label={`移除标签 ${tag}`}
+                aria-label={`移除 Skill 标签 ${tag}`}
                 checked={removeTags.includes(tag)}
                 onChange={() =>
                   setRemoveTags((current) =>
@@ -111,7 +119,7 @@ export function OrganizationChangeDialog({
               <span>#{tag}</span>
             </label>
           ))}
-          {existingTags.length === 0 ? <small>所选实例还没有标签。</small> : null}
+          {existingTags.length === 0 ? <small>所选实例还没有 Skill 标签。</small> : null}
         </div>
       </section>
       <section className="organization-form-section">
@@ -122,11 +130,23 @@ export function OrganizationChangeDialog({
               <input
                 type="checkbox"
                 aria-label={`Skill 组 ${group.name}`}
+                ref={(input) => {
+                  if (input) {
+                    input.indeterminate =
+                      anyGroupIds.includes(group.id) &&
+                      !allGroupIds.includes(group.id) &&
+                      !touchedGroupIds.includes(group.id);
+                  }
+                }}
                 checked={targetGroupIds.includes(group.id)}
                 onChange={() => toggleGroup(group.id)}
               />
               <span>{group.name}</span>
-              <small>{group.instanceIds.length}</small>
+              <small>
+                {anyGroupIds.includes(group.id) && !allGroupIds.includes(group.id)
+                  ? "部分已加入"
+                  : `${group.instanceIds.length}`}
+              </small>
             </label>
           ))}
           {organization.groups.length === 0 ? <small>请先创建一个 Skill 组。</small> : null}

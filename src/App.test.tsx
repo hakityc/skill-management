@@ -547,13 +547,17 @@ describe("Skill 管理器", () => {
       ],
     };
     let applied: SkillOrganizationChange | null = null;
+    let searchCalls = 0;
     const gateway: SkillGateway = {
       ...unavailableEditingMethods,
       loadSnapshot: async () => snapshot,
       chooseAndAuthorizeRoot: async () => null,
       rescanRoot: async () => snapshot,
       removeRoot: async () => snapshot,
-      searchSkills: async () => ({ instances: snapshot.instances, total: 3 }),
+      searchSkills: async () => {
+        searchCalls += 1;
+        return { instances: snapshot.instances, total: 3 };
+      },
       loadViewPreferences: async () => defaultViewPreferences,
       saveViewPreferences: async () => {},
       skillOrganization: async () => organization,
@@ -569,6 +573,8 @@ describe("Skill 管理器", () => {
     expect(screen.getByRole("button", { name: /Claude.*1/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /完全重复.*1/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /疑似重复.*1/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /未发现相关实例.*1/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /正常.*2/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /需要修复.*1/ })).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: /发布流程.*2/ }));
@@ -581,10 +587,14 @@ describe("Skill 管理器", () => {
       ]);
     });
 
+    await userEvent.click(screen.getByRole("button", { name: /#常用.*2/ }));
+    await waitFor(() => expect(searchCalls).toBeGreaterThan(1));
+
     await userEvent.click(screen.getByRole("checkbox", { name: "选择 alpha" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "选择 beta" }));
     await userEvent.click(screen.getByRole("button", { name: "批量整理" }));
-    await userEvent.type(screen.getByRole("textbox", { name: "添加标签" }), "API，安全审计");
+    await userEvent.type(screen.getByRole("textbox", { name: "添加 Skill 标签" }), "API，安全审计");
+    const callsBeforeApply = searchCalls;
     await userEvent.click(screen.getByRole("button", { name: "应用整理" }));
     expect(applied).toEqual({
       instanceIds: ["alpha", "beta"],
@@ -593,6 +603,7 @@ describe("Skill 管理器", () => {
       addGroupIds: [],
       removeGroupIds: [],
     });
+    await waitFor(() => expect(searchCalls).toBeGreaterThan(callsBeforeApply));
   });
 });
 

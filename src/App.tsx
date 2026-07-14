@@ -278,6 +278,7 @@ function SkillLibrary({
   const [editError, setEditError] = useState<string | null>(null);
   const [lastOperationId, setLastOperationId] = useState<number | null>(null);
   const [organization, setOrganization] = useState(EMPTY_ORGANIZATION);
+  const [organizationRevision, setOrganizationRevision] = useState(0);
   const [organizationBusy, setOrganizationBusy] = useState(false);
   const [organizationError, setOrganizationError] = useState<string | null>(null);
   const [selectedOrganizationIds, setSelectedOrganizationIds] = useState<string[]>([]);
@@ -287,6 +288,7 @@ function SkillLibrary({
   const repairCount = snapshot.instances.filter(
     (skill) => skill.status === "needsRepair",
   ).length;
+  const readyCount = snapshot.instances.filter((skill) => skill.status === "ready").length;
   const duplicateCount = snapshot.instances.filter(
     (skill) => skill.duplicateCheckStatus !== "none",
   ).length;
@@ -384,6 +386,7 @@ function SkillLibrary({
   }, [
     activeGroup,
     gateway,
+    organizationRevision,
     preferences.filters,
     preferences.sort,
     preferencesReady,
@@ -602,6 +605,7 @@ function SkillLibrary({
     try {
       const nextOrganization = await action();
       setOrganization(nextOrganization);
+      setOrganizationRevision((current) => current + 1);
       return nextOrganization;
     } catch (reason) {
       setOrganizationError(readableError(reason));
@@ -624,11 +628,11 @@ function SkillLibrary({
   const viewTitle = activeGroup
     ? activeGroup.name
     : preferences.filters.clients[0]
-      ? `${skillClientName(preferences.filters.clients[0])} Skills`
+      ? `${skillClientName(preferences.filters.clients[0])} Skill`
       : preferences.filters.rootIds[0]
         ? shortRoot(rootsById.get(preferences.filters.rootIds[0])?.path ?? "Skill 根目录")
-        : preferences.filters.repairStatus === "needsRepair"
-          ? "需要修复"
+        : preferences.filters.repairStatus !== "any"
+          ? preferences.filters.repairStatus === "needsRepair" ? "需要修复" : "正常"
           : preferences.filters.duplicateCheckStatuses[0]
             ? duplicateCheckStatusName(preferences.filters.duplicateCheckStatuses[0])
             : "全部 Skill";
@@ -665,6 +669,17 @@ function SkillLibrary({
         </button>
         <button
           className={
+            activeGroupId === null && preferences.filters.repairStatus === "ready"
+              ? "nav-item active"
+              : "nav-item"
+          }
+          onClick={() => showAutomaticView({ ...EMPTY_FILTERS, repairStatus: "ready" })}
+        >
+          <span>正常</span>
+          <b>{readyCount}</b>
+        </button>
+        <button
+          className={
             activeGroupId === null && preferences.filters.repairStatus === "needsRepair"
               ? "nav-item active"
               : "nav-item"
@@ -682,7 +697,7 @@ function SkillLibrary({
         </button>
         <div className="sidebar-view-block">
           <small>重复检查状态</small>
-          {(["exact", "suspected", "nameConflict"] as DuplicateCheckStatus[]).map((status) => {
+          {(["none", "exact", "suspected", "nameConflict"] as DuplicateCheckStatus[]).map((status) => {
             const count = snapshot.instances.filter(
               (instance) => instance.duplicateCheckStatus === status,
             ).length;

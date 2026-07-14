@@ -29,7 +29,7 @@ fn personal_user_organizes_instances_without_changing_real_skill_files() {
             add_group_ids: vec![group_id],
             remove_group_ids: vec![],
         })
-        .expect("批量加入 Skill 组并添加标签");
+        .expect("批量加入 Skill 组并添加 Skill 标签");
     workspace
         .reorder_skill_group(group_id, &[release_id.clone(), api_id.clone()])
         .expect("自定义 Skill 组顺序");
@@ -44,7 +44,9 @@ fn personal_user_organizes_instances_without_changing_real_skill_files() {
 
     let reopened = SkillWorkspace::open(&database_path).expect("重新打开 SkillWorkspace");
     reopened.rescan_all_roots().expect("重新扫描 Skill 根目录");
-    let organization = reopened.skill_organization().expect("读取本地组织状态");
+    let organization = reopened
+        .skill_organization()
+        .expect("读取 Skill 组和 Skill 标签");
     assert_eq!(organization.groups[0].name, "发布流程");
     assert_eq!(
         organization.groups[0].instance_ids,
@@ -64,7 +66,7 @@ fn personal_user_organizes_instances_without_changing_real_skill_files() {
             add_group_ids: vec![],
             remove_group_ids: vec![group_id],
         })
-        .expect("从单个实例移除标签和 Skill 组");
+        .expect("从单个实例移除 Skill 标签和 Skill 组");
     let organization = reopened
         .delete_skill_group(group_id)
         .expect("删除虚拟 Skill 组");
