@@ -4,7 +4,8 @@ use std::{
 };
 
 use skill_workspace::{
-    DuplicateStatus, SkillClient, SkillFilters, SkillListDensity, SkillQuery, SkillSort,
+    DuplicateCheckStatus, DuplicateCheckStatusUpdate, SkillClient, SkillFilters, SkillListDensity,
+    SkillOrganizationSearchTermsUpdate, SkillQuery, SkillRepairFilter, SkillSort,
     SkillSortDirection, SkillSortField, SkillWorkspace, SkillWorkspaceViewPreferences,
 };
 use tempfile::tempdir;
@@ -55,7 +56,7 @@ fn personal_user_searches_name_description_body_and_path_after_content_changes()
 }
 
 #[test]
-fn personal_user_combines_client_root_repair_and_duplicate_filters() {
+fn personal_user_combines_client_root_repair_and_duplicate_check_filters() {
     let sandbox = tempdir().expect("创建临时工作区");
     let codex_root = sandbox.path().join(".codex/skills");
     let claude_root = sandbox.path().join(".claude/skills");
@@ -65,8 +66,8 @@ fn personal_user_combines_client_root_repair_and_duplicate_filters() {
         "可正常使用。",
         "Codex 内容。",
     );
-    write_invalid_skill(&codex_root.join("broken-codex"));
-    write_invalid_skill(&claude_root.join("broken-claude"));
+    write_repairable_skill(&codex_root.join("broken-codex"));
+    write_repairable_skill(&claude_root.join("broken-claude"));
     let workspace =
         SkillWorkspace::open(sandbox.path().join("index.sqlite3")).expect("打开 SkillWorkspace");
     let codex_root_id = workspace
@@ -83,8 +84,8 @@ fn personal_user_combines_client_root_repair_and_duplicate_filters() {
             filters: SkillFilters {
                 clients: vec![SkillClient::Codex],
                 root_ids: vec![codex_root_id],
-                needs_repair: Some(true),
-                duplicate_statuses: vec![DuplicateStatus::None],
+                repair_status: SkillRepairFilter::NeedsRepair,
+                duplicate_check_statuses: vec![DuplicateCheckStatus::None],
             },
             ..SkillQuery::default()
         })
@@ -96,7 +97,7 @@ fn personal_user_combines_client_root_repair_and_duplicate_filters() {
     let no_exact_duplicates = workspace
         .search_skills(&SkillQuery {
             filters: SkillFilters {
-                duplicate_statuses: vec![DuplicateStatus::Exact],
+                duplicate_check_statuses: vec![DuplicateCheckStatus::Exact],
                 ..SkillFilters::default()
             },
             ..SkillQuery::default()
@@ -181,6 +182,70 @@ fn personal_user_sorts_by_name_modified_time_and_root_path() {
 }
 
 #[test]
+fn personal_user_sorts_by_created_time_and_filters_duplicate_check_results() {
+    let sandbox = tempdir().expect("创建临时工作区");
+    let root = sandbox.path().join("skills");
+    for (index, name) in ["zeta", "alpha", "beta", "omega"].into_iter().enumerate() {
+        write_skill(&root.join(name), name, "排序夹具。", "正文。");
+        if index < 3 {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    let workspace =
+        SkillWorkspace::open(sandbox.path().join("index.sqlite3")).expect("打开 SkillWorkspace");
+    let snapshot = workspace.add_root(&root).expect("扫描排序夹具");
+    let id_for = |name: &str| {
+        snapshot
+            .instances
+            .iter()
+            .find(|skill| skill.name == name)
+            .expect("找到 Skill 实例")
+            .id
+            .clone()
+    };
+    workspace
+        .save_duplicate_check_statuses(&[
+            DuplicateCheckStatusUpdate {
+                instance_id: id_for("alpha"),
+                status: DuplicateCheckStatus::Exact,
+            },
+            DuplicateCheckStatusUpdate {
+                instance_id: id_for("zeta"),
+                status: DuplicateCheckStatus::Suspected,
+            },
+            DuplicateCheckStatusUpdate {
+                instance_id: id_for("beta"),
+                status: DuplicateCheckStatus::NameConflict,
+            },
+        ])
+        .expect("保存重复检查状态");
+
+    assert_sorted_names(
+        &workspace,
+        SkillSortField::CreatedAt,
+        SkillSortDirection::Asc,
+        &["zeta", "alpha", "beta", "omega"],
+    );
+    assert_sorted_names(
+        &workspace,
+        SkillSortField::DuplicateCheckStatus,
+        SkillSortDirection::Asc,
+        &["alpha", "zeta", "beta", "omega"],
+    );
+    let suspected = workspace
+        .search_skills(&SkillQuery {
+            filters: SkillFilters {
+                duplicate_check_statuses: vec![DuplicateCheckStatus::Suspected],
+                ..SkillFilters::default()
+            },
+            ..SkillQuery::default()
+        })
+        .expect("筛选疑似重复实例");
+    assert_eq!(suspected.instances.len(), 1);
+    assert_eq!(suspected.instances[0].name, "zeta");
+}
+
+#[test]
 fn personal_user_keeps_view_preferences_after_restart_and_index_rebuild() {
     let sandbox = tempdir().expect("创建临时工作区");
     let root = sandbox.path().join(".codex/skills");
@@ -192,8 +257,8 @@ fn personal_user_keeps_view_preferences_after_restart_and_index_rebuild() {
         filters: SkillFilters {
             clients: vec![SkillClient::Codex],
             root_ids: vec![root_id],
-            needs_repair: Some(false),
-            duplicate_statuses: vec![DuplicateStatus::None],
+            repair_status: SkillRepairFilter::Ready,
+            duplicate_check_statuses: vec![DuplicateCheckStatus::None],
         },
         sort: SkillSort {
             field: SkillSortField::ModifiedAt,
@@ -242,7 +307,7 @@ fn thousand_instance_catalog_keeps_common_search_and_filter_within_baseline() {
         text: "needle".to_owned(),
         filters: SkillFilters {
             clients: vec![SkillClient::Codex],
-            needs_repair: Some(false),
+            repair_status: SkillRepairFilter::Ready,
             ..SkillFilters::default()
         },
         sort: SkillSort {
@@ -315,6 +380,37 @@ fn upgraded_legacy_catalog_rebuilds_search_after_instance_ids_are_migrated() {
     assert_names(&upgraded, "legacy-skill", &["legacy-skill"]);
 }
 
+#[test]
+fn organization_terms_participate_in_search_after_restart_and_rescan() {
+    let sandbox = tempdir().expect("创建临时工作区");
+    let root = sandbox.path().join("skills");
+    let database_path = sandbox.path().join("index.sqlite3");
+    write_skill(
+        &root.join("api-review"),
+        "api-review",
+        "接口审查。",
+        "正文。",
+    );
+    let workspace = SkillWorkspace::open(&database_path).expect("打开 SkillWorkspace");
+    let snapshot = workspace.add_root(&root).expect("扫描根目录");
+    workspace
+        .save_organization_search_terms(&[SkillOrganizationSearchTermsUpdate {
+            instance_id: snapshot.instances[0].id.clone(),
+            tags: vec!["安全审计".to_owned(), "API".to_owned()],
+            skill_groups: vec!["支付项目".to_owned()],
+        }])
+        .expect("保存组织检索词");
+
+    assert_names(&workspace, "安全审计", &["api-review"]);
+    assert_names(&workspace, "支付项目", &["api-review"]);
+    drop(workspace);
+
+    let reopened = SkillWorkspace::open(&database_path).expect("重新打开 SkillWorkspace");
+    assert_names(&reopened, "安全审计", &["api-review"]);
+    reopened.rescan_all_roots().expect("重新扫描并重建索引");
+    assert_names(&reopened, "支付项目", &["api-review"]);
+}
+
 fn assert_names(workspace: &SkillWorkspace, text: &str, expected: &[&str]) {
     let result = workspace
         .search_skills(&SkillQuery {
@@ -377,9 +473,9 @@ fn write_skill(directory: &std::path::Path, name: &str, description: &str, body:
     .expect("写入 SKILL.md");
 }
 
-fn write_invalid_skill(directory: &std::path::Path) {
-    fs::create_dir_all(directory).expect("创建无效 Skill 目录");
-    fs::write(directory.join("SKILL.md"), "# 缺少 frontmatter\n").expect("写入无效 SKILL.md");
+fn write_repairable_skill(directory: &std::path::Path) {
+    fs::create_dir_all(directory).expect("创建需要修复的 Skill 目录");
+    fs::write(directory.join("SKILL.md"), "# 缺少 frontmatter\n").expect("写入需要修复的 SKILL.md");
 }
 
 fn set_modified_time(path: &std::path::Path, modified: std::time::SystemTime) {

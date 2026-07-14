@@ -6,7 +6,7 @@ export type SkillClient =
   | "openCode"
   | "hermes"
   | "other";
-export type DuplicateStatus = "none" | "exact" | "suspected" | "nameConflict";
+export type DuplicateCheckStatus = "none" | "exact" | "suspected" | "nameConflict";
 
 export interface SkillInstance {
   id: string;
@@ -20,7 +20,7 @@ export interface SkillInstance {
   status: SkillStatus;
   error: string | null;
   client: SkillClient;
-  duplicateStatus: DuplicateStatus;
+  duplicateCheckStatus: DuplicateCheckStatus;
   createdAt: number;
   modifiedAt: number;
 }
@@ -28,8 +28,8 @@ export interface SkillInstance {
 export interface SkillFilters {
   clients: SkillClient[];
   rootIds: number[];
-  needsRepair: boolean | null;
-  duplicateStatuses: DuplicateStatus[];
+  repairStatus: "any" | "ready" | "needsRepair";
+  duplicateCheckStatuses: DuplicateCheckStatus[];
 }
 
 export type SkillSortField =
@@ -37,7 +37,7 @@ export type SkillSortField =
   | "modifiedAt"
   | "createdAt"
   | "root"
-  | "duplicateStatus";
+  | "duplicateCheckStatus";
 export type SkillSortDirection = "asc" | "desc";
 
 export interface SkillSort {

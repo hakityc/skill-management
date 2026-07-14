@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type {
-  DuplicateStatus,
+  DuplicateCheckStatus,
   SkillClient,
   SkillFilters,
   SkillInstance,
@@ -184,8 +184,8 @@ function EmptyState({
 const EMPTY_FILTERS: SkillFilters = {
   clients: [],
   rootIds: [],
-  needsRepair: null,
-  duplicateStatuses: [],
+  repairStatus: "any",
+  duplicateCheckStatuses: [],
 };
 
 const DEFAULT_VIEW_PREFERENCES: SkillWorkspaceViewPreferences = {
@@ -293,8 +293,8 @@ function SkillLibrary({
     queryText.length > 0 ||
     preferences.filters.clients.length > 0 ||
     preferences.filters.rootIds.length > 0 ||
-    preferences.filters.needsRepair !== null ||
-    preferences.filters.duplicateStatuses.length > 0;
+    preferences.filters.repairStatus !== "any" ||
+    preferences.filters.duplicateCheckStatuses.length > 0;
   const resultStatus = searching
     ? "正在检索…"
     : queryText
@@ -306,15 +306,17 @@ function SkillLibrary({
       <aside className="library-sidebar">
         <p className="eyebrow">资料库</p>
         <button
-          className={preferences.filters.needsRepair === null ? "nav-item active" : "nav-item"}
-          onClick={() => updateSingleFilter("needsRepair", null)}
+          className={preferences.filters.repairStatus === "any" ? "nav-item active" : "nav-item"}
+          onClick={() => updateSingleFilter("repairStatus", "any")}
         >
           <span>全部 Skill</span>
           <b>{snapshot.instances.length}</b>
         </button>
         <button
-          className={preferences.filters.needsRepair === true ? "nav-item active" : "nav-item"}
-          onClick={() => updateSingleFilter("needsRepair", true)}
+          className={
+            preferences.filters.repairStatus === "needsRepair" ? "nav-item active" : "nav-item"
+          }
+          onClick={() => updateSingleFilter("repairStatus", "needsRepair")}
         >
           <span>需要修复</span>
           <b>{repairCount}</b>
@@ -351,7 +353,7 @@ function SkillLibrary({
             />
           </label>
           <FilterSelect
-            label="客户端筛选"
+            label="Skill 客户端筛选"
             value={preferences.filters.clients[0] ?? ""}
             onChange={(value) =>
               updateSingleFilter("clients", value ? [value as SkillClient] : [])
@@ -377,37 +379,28 @@ function SkillLibrary({
           />
           <FilterSelect
             label="状态筛选"
-            value={
-              preferences.filters.needsRepair === null
-                ? ""
-                : preferences.filters.needsRepair
-                  ? "needsRepair"
-                  : "ready"
-            }
+            value={preferences.filters.repairStatus}
             onChange={(value) =>
-              updateSingleFilter(
-                "needsRepair",
-                value === "" ? null : value === "needsRepair",
-              )
+              updateSingleFilter("repairStatus", value as SkillFilters["repairStatus"])
             }
             options={[
-              ["", "全部状态"],
+              ["any", "全部状态"],
               ["ready", "正常"],
               ["needsRepair", "需要修复"],
             ]}
           />
           <FilterSelect
-            label="重复状态筛选"
-            value={preferences.filters.duplicateStatuses[0] ?? ""}
+            label="重复检查状态筛选"
+            value={preferences.filters.duplicateCheckStatuses[0] ?? ""}
             onChange={(value) =>
               updateSingleFilter(
-                "duplicateStatuses",
-                value ? [value as DuplicateStatus] : [],
+                "duplicateCheckStatuses",
+                value ? [value as DuplicateCheckStatus] : [],
               )
             }
             options={[
-              ["", "全部重复状态"],
-              ["none", "无重复"],
+              ["", "全部检查状态"],
+              ["none", "未发现相关实例"],
               ["exact", "完全重复"],
               ["suspected", "疑似重复"],
               ["nameConflict", "同名冲突"],
@@ -423,7 +416,7 @@ function SkillLibrary({
               ["modifiedAt:desc", "最近修改"],
               ["createdAt:desc", "最近创建"],
               ["root:asc", "根目录"],
-              ["duplicateStatus:asc", "重复状态"],
+              ["duplicateCheckStatus:asc", "重复检查状态"],
             ]}
           />
           <button

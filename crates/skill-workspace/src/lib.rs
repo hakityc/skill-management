@@ -22,6 +22,8 @@ pub enum WorkspaceError {
     Database(#[from] rusqlite::Error),
     #[error("读取视图偏好失败：{0}")]
     Preferences(#[from] serde_json::Error),
+    #[error("找不到 Skill 实例：{0}")]
+    UnknownInstance(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,7 +46,7 @@ pub enum SkillClient {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum DuplicateStatus {
+pub enum DuplicateCheckStatus {
     None,
     Exact,
     Suspected,
@@ -74,7 +76,7 @@ pub struct SkillInstance {
     pub status: SkillStatus,
     pub error: Option<String>,
     pub client: SkillClient,
-    pub duplicate_status: DuplicateStatus,
+    pub duplicate_check_status: DuplicateCheckStatus,
     pub created_at: i64,
     pub modified_at: i64,
     #[serde(skip)]
@@ -94,8 +96,17 @@ pub struct SkillQuery {
 pub struct SkillFilters {
     pub clients: Vec<SkillClient>,
     pub root_ids: Vec<i64>,
-    pub needs_repair: Option<bool>,
-    pub duplicate_statuses: Vec<DuplicateStatus>,
+    pub repair_status: SkillRepairFilter,
+    pub duplicate_check_statuses: Vec<DuplicateCheckStatus>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SkillRepairFilter {
+    #[default]
+    Any,
+    Ready,
+    NeedsRepair,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +117,7 @@ pub enum SkillSortField {
     ModifiedAt,
     CreatedAt,
     Root,
-    DuplicateStatus,
+    DuplicateCheckStatus,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +156,21 @@ pub struct SkillWorkspaceViewPreferences {
 pub struct SkillSearchResult {
     pub instances: Vec<SkillInstance>,
     pub total: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateCheckStatusUpdate {
+    pub instance_id: String,
+    pub status: DuplicateCheckStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillOrganizationSearchTermsUpdate {
+    pub instance_id: String,
+    pub tags: Vec<String>,
+    pub skill_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,10 +228,15 @@ impl SkillWorkspace {
                 status TEXT NOT NULL,
                 error TEXT,
                 client TEXT NOT NULL DEFAULT 'other',
-                duplicate_status TEXT NOT NULL DEFAULT 'none',
+                duplicate_check_status TEXT NOT NULL DEFAULT 'none',
                 created_at INTEGER NOT NULL DEFAULT 0,
                 modified_at INTEGER NOT NULL DEFAULT 0,
                 search_document TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS skill_organization_search_terms (
+                instance_id TEXT PRIMARY KEY,
+                tags TEXT NOT NULL DEFAULT '',
+                skill_groups TEXT NOT NULL DEFAULT ''
             );
             ",
         )?;
@@ -247,6 +278,13 @@ impl SkillWorkspace {
     pub fn remove_root(&self, root_id: i64) -> Result<WorkspaceSnapshot, WorkspaceError> {
         let mut connection = Connection::open(&self.database_path)?;
         let transaction = connection.transaction()?;
+        transaction.execute(
+            "
+            DELETE FROM skill_organization_search_terms
+            WHERE instance_id IN (SELECT id FROM skill_instances WHERE root_id = ?1)
+            ",
+            [root_id],
+        )?;
         delete_search_documents_for_root(&transaction, root_id)?;
         transaction.execute("DELETE FROM skill_instances WHERE root_id = ?1", [root_id])?;
         transaction.execute("DELETE FROM skill_roots WHERE id = ?1", [root_id])?;
@@ -351,37 +389,17 @@ impl SkillWorkspace {
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        let mut statement = connection.prepare(
+        let instances = query_instances(
+            &connection,
             "
             SELECT id, root_id, name, description, relative_path, skill_file_path,
-                   link_path, real_path, status, error, client, duplicate_status,
+                   link_path, real_path, status, error, client, duplicate_check_status,
                    created_at, modified_at, search_document
             FROM skill_instances
             ORDER BY root_id, relative_path
             ",
+            [],
         )?;
-        let instances = statement
-            .query_map([], |row| {
-                let status: String = row.get(8)?;
-                Ok(SkillInstance {
-                    id: row.get(0)?,
-                    root_id: row.get(1)?,
-                    name: row.get(2)?,
-                    description: row.get(3)?,
-                    relative_path: row.get(4)?,
-                    skill_file_path: row.get(5)?,
-                    link_path: row.get(6)?,
-                    real_path: row.get(7)?,
-                    status: SkillStatus::from_database(&status),
-                    error: row.get(9)?,
-                    client: SkillClient::from_database(&row.get::<_, String>(10)?),
-                    duplicate_status: DuplicateStatus::from_database(&row.get::<_, String>(11)?),
-                    created_at: row.get(12)?,
-                    modified_at: row.get(13)?,
-                    search_document: row.get(14)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(WorkspaceSnapshot {
             authorized_root,
@@ -398,7 +416,7 @@ impl SkillWorkspace {
                 &connection,
                 "
                 SELECT id, root_id, name, description, relative_path, skill_file_path,
-                       link_path, real_path, status, error, client, duplicate_status,
+                       link_path, real_path, status, error, client, duplicate_check_status,
                        created_at, modified_at, search_document
                 FROM skill_instances
                 ORDER BY name COLLATE NOCASE, relative_path
@@ -411,7 +429,7 @@ impl SkillWorkspace {
                 &connection,
                 "
                 SELECT id, root_id, name, description, relative_path, skill_file_path,
-                       link_path, real_path, status, error, client, duplicate_status,
+                       link_path, real_path, status, error, client, duplicate_check_status,
                        created_at, modified_at, search_document
                 FROM skill_instances
                 WHERE name LIKE ?1 ESCAPE '\\'
@@ -433,7 +451,7 @@ impl SkillWorkspace {
                        skill_instances.skill_file_path, skill_instances.link_path,
                        skill_instances.real_path, skill_instances.status,
                        skill_instances.error, skill_instances.client,
-                       skill_instances.duplicate_status, skill_instances.created_at,
+                       skill_instances.duplicate_check_status, skill_instances.created_at,
                        skill_instances.modified_at, skill_instances.search_document
                 FROM skill_instances
                 JOIN skill_search ON skill_search.instance_id = skill_instances.id
@@ -484,6 +502,65 @@ impl SkillWorkspace {
         )?;
         Ok(())
     }
+
+    pub fn save_duplicate_check_statuses(
+        &self,
+        updates: &[DuplicateCheckStatusUpdate],
+    ) -> Result<(), WorkspaceError> {
+        let mut connection = Connection::open(&self.database_path)?;
+        let transaction = connection.transaction()?;
+        for update in updates {
+            let changed = transaction.execute(
+                "
+                UPDATE skill_instances
+                SET duplicate_check_status = ?1
+                WHERE id = ?2
+                ",
+                params![update.status.as_database(), update.instance_id],
+            )?;
+            if changed == 0 {
+                return Err(WorkspaceError::UnknownInstance(update.instance_id.clone()));
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn save_organization_search_terms(
+        &self,
+        updates: &[SkillOrganizationSearchTermsUpdate],
+    ) -> Result<(), WorkspaceError> {
+        let mut connection = Connection::open(&self.database_path)?;
+        let transaction = connection.transaction()?;
+        for update in updates {
+            let exists = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM skill_instances WHERE id = ?1)",
+                [&update.instance_id],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !exists {
+                return Err(WorkspaceError::UnknownInstance(update.instance_id.clone()));
+            }
+            transaction.execute(
+                "
+                INSERT INTO skill_organization_search_terms (
+                    instance_id, tags, skill_groups
+                ) VALUES (?1, ?2, ?3)
+                ON CONFLICT(instance_id) DO UPDATE SET
+                    tags = excluded.tags,
+                    skill_groups = excluded.skill_groups
+                ",
+                params![
+                    update.instance_id,
+                    update.tags.join("\n"),
+                    update.skill_groups.join("\n"),
+                ],
+            )?;
+            rebuild_search_document(&transaction, &update.instance_id)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
 }
 
 impl SkillStatus {
@@ -526,7 +603,7 @@ impl SkillClient {
     }
 }
 
-impl DuplicateStatus {
+impl DuplicateCheckStatus {
     fn as_database(&self) -> &'static str {
         match self {
             Self::None => "none",
@@ -550,11 +627,17 @@ impl SkillFilters {
     fn matches(&self, skill: &SkillInstance) -> bool {
         (self.clients.is_empty() || self.clients.contains(&skill.client))
             && (self.root_ids.is_empty() || self.root_ids.contains(&skill.root_id))
-            && self.needs_repair.is_none_or(|needs_repair| {
-                needs_repair == matches!(skill.status, SkillStatus::NeedsRepair)
-            })
-            && (self.duplicate_statuses.is_empty()
-                || self.duplicate_statuses.contains(&skill.duplicate_status))
+            && match self.repair_status {
+                SkillRepairFilter::Any => true,
+                SkillRepairFilter::Ready => matches!(skill.status, SkillStatus::Ready),
+                SkillRepairFilter::NeedsRepair => {
+                    matches!(skill.status, SkillStatus::NeedsRepair)
+                }
+            }
+            && (self.duplicate_check_statuses.is_empty()
+                || self
+                    .duplicate_check_statuses
+                    .contains(&skill.duplicate_check_status))
     }
 }
 
@@ -572,9 +655,8 @@ impl SkillSort {
             SkillSortField::Root => root_paths
                 .get(&left.root_id)
                 .cmp(&root_paths.get(&right.root_id)),
-            SkillSortField::DuplicateStatus => {
-                duplicate_rank(&left.duplicate_status).cmp(&duplicate_rank(&right.duplicate_status))
-            }
+            SkillSortField::DuplicateCheckStatus => duplicate_rank(&left.duplicate_check_status)
+                .cmp(&duplicate_rank(&right.duplicate_check_status)),
         };
         let ordering = match self.direction {
             SkillSortDirection::Asc => ordering,
@@ -590,12 +672,12 @@ fn normalized_name(skill: &SkillInstance) -> String {
     skill.name.to_lowercase()
 }
 
-fn duplicate_rank(status: &DuplicateStatus) -> u8 {
+fn duplicate_rank(status: &DuplicateCheckStatus) -> u8 {
     match status {
-        DuplicateStatus::Exact => 0,
-        DuplicateStatus::Suspected => 1,
-        DuplicateStatus::NameConflict => 2,
-        DuplicateStatus::None => 3,
+        DuplicateCheckStatus::Exact => 0,
+        DuplicateCheckStatus::Suspected => 1,
+        DuplicateCheckStatus::NameConflict => 2,
+        DuplicateCheckStatus::None => 3,
     }
 }
 
@@ -653,9 +735,12 @@ fn migrate_workspace_index(connection: &Connection) -> Result<(), WorkspaceError
             [],
         )?;
     }
-    if !columns.iter().any(|column| column == "duplicate_status") {
+    if !columns
+        .iter()
+        .any(|column| column == "duplicate_check_status")
+    {
         connection.execute(
-            "ALTER TABLE skill_instances ADD COLUMN duplicate_status TEXT NOT NULL DEFAULT 'none'",
+            "ALTER TABLE skill_instances ADD COLUMN duplicate_check_status TEXT NOT NULL DEFAULT 'none'",
             [],
         )?;
     }
@@ -748,9 +833,13 @@ fn migrate_workspace_index(connection: &Connection) -> Result<(), WorkspaceError
         INSERT INTO skill_search (
             instance_id, name, description, body, path, tags, skill_groups
         )
-        SELECT id, name, description, search_document,
-               relative_path || ' ' || skill_file_path || ' ' || real_path, '', ''
-        FROM skill_instances;
+        SELECT skill_instances.id, name, description, search_document,
+               relative_path || ' ' || skill_file_path || ' ' || real_path,
+               COALESCE(skill_organization_search_terms.tags, ''),
+               COALESCE(skill_organization_search_terms.skill_groups, '')
+        FROM skill_instances
+        LEFT JOIN skill_organization_search_terms
+          ON skill_organization_search_terms.instance_id = skill_instances.id;
         ",
     )?;
     Ok(())
@@ -765,7 +854,7 @@ fn persist_instances(
             "
             INSERT INTO skill_instances (
                 id, root_id, name, description, relative_path, skill_file_path,
-                link_path, real_path, status, error, client, duplicate_status,
+                link_path, real_path, status, error, client, duplicate_check_status,
                 created_at, modified_at, search_document
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
@@ -783,7 +872,7 @@ fn persist_instances(
                 skill.status.as_database(),
                 skill.error,
                 skill.client.as_database(),
-                skill.duplicate_status.as_database(),
+                skill.duplicate_check_status.as_database(),
                 skill.created_at,
                 skill.modified_at,
                 skill.search_document,
@@ -794,7 +883,15 @@ fn persist_instances(
             INSERT INTO skill_search (
                 instance_id, name, description, body, path, tags, skill_groups
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, '', '')
+            VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                COALESCE((
+                    SELECT tags FROM skill_organization_search_terms WHERE instance_id = ?1
+                ), ''),
+                COALESCE((
+                    SELECT skill_groups FROM skill_organization_search_terms WHERE instance_id = ?1
+                ), '')
+            )
             ",
             params![
                 skill.id,
@@ -821,6 +918,33 @@ fn delete_search_documents_for_root(
         WHERE instance_id IN (SELECT id FROM skill_instances WHERE root_id = ?1)
         ",
         [root_id],
+    )?;
+    Ok(())
+}
+
+fn rebuild_search_document(
+    transaction: &rusqlite::Transaction<'_>,
+    instance_id: &str,
+) -> Result<(), WorkspaceError> {
+    transaction.execute(
+        "DELETE FROM skill_search WHERE instance_id = ?1",
+        [instance_id],
+    )?;
+    transaction.execute(
+        "
+        INSERT INTO skill_search (
+            instance_id, name, description, body, path, tags, skill_groups
+        )
+        SELECT skill_instances.id, name, description, search_document,
+               relative_path || ' ' || skill_file_path || ' ' || real_path,
+               COALESCE(skill_organization_search_terms.tags, ''),
+               COALESCE(skill_organization_search_terms.skill_groups, '')
+        FROM skill_instances
+        LEFT JOIN skill_organization_search_terms
+          ON skill_organization_search_terms.instance_id = skill_instances.id
+        WHERE skill_instances.id = ?1
+        ",
+        [instance_id],
     )?;
     Ok(())
 }
@@ -861,7 +985,9 @@ where
                 status: SkillStatus::from_database(&status),
                 error: row.get(9)?,
                 client: SkillClient::from_database(&row.get::<_, String>(10)?),
-                duplicate_status: DuplicateStatus::from_database(&row.get::<_, String>(11)?),
+                duplicate_check_status: DuplicateCheckStatus::from_database(
+                    &row.get::<_, String>(11)?,
+                ),
                 created_at: row.get(12)?,
                 modified_at: row.get(13)?,
                 search_document: row.get(14)?,
@@ -1132,7 +1258,7 @@ fn read_skill_instance(
         status,
         error: parsed.error,
         client: detect_client(root),
-        duplicate_status: DuplicateStatus::None,
+        duplicate_check_status: DuplicateCheckStatus::None,
         created_at,
         modified_at,
         search_document,
