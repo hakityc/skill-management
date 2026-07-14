@@ -5,9 +5,9 @@ mod edit;
 
 pub use detail::{SkillDetail, SkillFileEntry, SkillFileKind, SkillFilePreview};
 pub use edit::{
-    SkillChangeKind, SkillChangeOutcome, SkillChangePlan, SkillDraft, SkillDraftTarget,
-    SkillDraftValidation, SkillFileDraftChange, SkillFileDraftOperation, SkillPlannedChange,
-    SkillValidationIssue,
+    SkillChangeKind, SkillChangeOutcome, SkillChangePlan, SkillChangeRecord, SkillDraft,
+    SkillDraftTarget, SkillDraftValidation, SkillFileDraftChange, SkillFileDraftOperation,
+    SkillPlannedChange, SkillValidationIssue,
 };
 
 use std::{
@@ -276,12 +276,16 @@ impl SkillWorkspace {
                 was_new INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 undone INTEGER NOT NULL DEFAULT 0,
-                completed INTEGER NOT NULL DEFAULT 0
+                completed INTEGER NOT NULL DEFAULT 0,
+                undoing INTEGER NOT NULL DEFAULT 0
             );
             ",
         )?;
         migrate_workspace_index(&connection)?;
-        Ok(Self { database_path })
+        drop(connection);
+        let workspace = Self { database_path };
+        workspace.recover_interrupted_changes()?;
+        Ok(workspace)
     }
 
     pub fn add_root(&self, root: impl AsRef<Path>) -> Result<WorkspaceSnapshot, WorkspaceError> {
@@ -820,6 +824,12 @@ fn migrate_workspace_index(connection: &Connection) -> Result<(), WorkspaceError
     if !operation_columns.iter().any(|column| column == "completed") {
         connection.execute(
             "ALTER TABLE skill_change_operations ADD COLUMN completed INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    if !operation_columns.iter().any(|column| column == "undoing") {
+        connection.execute(
+            "ALTER TABLE skill_change_operations ADD COLUMN undoing INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
     }

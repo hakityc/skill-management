@@ -62,7 +62,11 @@ fn personal_user_views_metadata_file_tree_and_safe_file_previews() {
         workspace
             .read_skill_file(instance_id, "preview.png")
             .expect("读取二进制信息"),
-        SkillFilePreview::Binary { size: 6 }
+        SkillFilePreview::Binary {
+            size: 6,
+            media_type: Some("image/png".to_owned()),
+            preview_content: Some(vec![0x89, b'P', b'N', b'G', 0, 0xff]),
+        }
     );
     let traversal = workspace
         .read_skill_file(instance_id, "../outside.txt")

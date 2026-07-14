@@ -75,6 +75,14 @@ pub struct SkillChangeOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SkillChangeRecord {
+    pub operation_id: i64,
+    pub target_directory: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SkillPlannedChange {
     pub relative_path: String,
     pub kind: SkillChangeKind,
@@ -350,6 +358,32 @@ impl SkillWorkspace {
         })
     }
 
+    pub fn latest_undoable_skill_change(
+        &self,
+    ) -> Result<Option<SkillChangeRecord>, WorkspaceError> {
+        let connection = Connection::open(&self.database_path)?;
+        connection
+            .query_row(
+                "
+                SELECT id, target_directory, created_at
+                FROM skill_change_operations
+                WHERE completed = 1 AND undone = 0
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                ",
+                [],
+                |row| {
+                    Ok(SkillChangeRecord {
+                        operation_id: row.get(0)?,
+                        target_directory: row.get(1)?,
+                        created_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(WorkspaceError::from)
+    }
+
     pub fn undo_skill_change(
         &self,
         operation_id: i64,
@@ -358,7 +392,7 @@ impl SkillWorkspace {
         let operation = connection
             .query_row(
                 "
-                SELECT root_id, target_directory, backup_directory, was_new, undone
+                SELECT root_id, target_directory, backup_directory, was_new, undone, undoing
                 FROM skill_change_operations
                 WHERE id = ?1 AND completed = 1
                 ",
@@ -370,39 +404,89 @@ impl SkillWorkspace {
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, bool>(3)?,
                         row.get::<_, bool>(4)?,
+                        row.get::<_, bool>(5)?,
                     ))
                 },
             )
             .optional()?
             .ok_or(WorkspaceError::UnknownChangeOperation(operation_id))?;
-        let (root_id, target_directory, backup_directory, was_new, undone) = operation;
+        let (root_id, target_directory, backup_directory, was_new, undone, _undoing) = operation;
         if undone {
             return Err(WorkspaceError::ChangeAlreadyUndone);
         }
-        let target = PathBuf::from(target_directory);
-        if was_new {
-            let tombstone = sibling_work_path(&target, "undo", operation_id)?;
-            remove_path_if_exists(&tombstone)?;
-            fs::rename(&target, &tombstone)?;
-            remove_path_if_exists(&tombstone)?;
-        } else {
-            let backup = backup_directory
-                .map(PathBuf::from)
-                .ok_or_else(|| WorkspaceError::InvalidDraft("编辑备份不存在。".to_owned()))?;
-            let stage = sibling_work_path(&target, "undo", operation_id)?;
-            remove_path_if_exists(&stage)?;
-            copy_directory(&backup, &stage)?;
-            atomic_replace_directory(&stage, &target, operation_id)?;
-        }
         connection.execute(
-            "UPDATE skill_change_operations SET undone = 1 WHERE id = ?1",
+            "UPDATE skill_change_operations SET undoing = 1 WHERE id = ?1",
             [operation_id],
         )?;
+        drop(connection);
+        apply_undo(
+            &PathBuf::from(target_directory),
+            backup_directory.as_deref().map(Path::new),
+            was_new,
+            operation_id,
+        )?;
         let snapshot = self.rescan_root(root_id)?;
+        let connection = Connection::open(&self.database_path)?;
+        connection.execute(
+            "UPDATE skill_change_operations SET undone = 1, undoing = 0 WHERE id = ?1",
+            [operation_id],
+        )?;
         Ok(SkillChangeOutcome {
             operation_id,
             snapshot,
         })
+    }
+
+    pub(crate) fn recover_interrupted_changes(&self) -> Result<(), WorkspaceError> {
+        let connection = Connection::open(&self.database_path)?;
+        let mut statement = connection.prepare(
+            "
+            SELECT id, root_id, target_directory, backup_directory,
+                   was_new, completed, undone, undoing
+            FROM skill_change_operations
+            WHERE completed = 0 OR (completed = 1 AND undone = 0 AND undoing = 1)
+            ORDER BY id
+            ",
+        )?;
+        let operations = statement
+            .query_map([], |row| {
+                Ok(RecoverableOperation {
+                    id: row.get(0)?,
+                    root_id: row.get(1)?,
+                    target_directory: row.get(2)?,
+                    backup_directory: row.get(3)?,
+                    was_new: row.get(4)?,
+                    completed: row.get(5)?,
+                    undone: row.get(6)?,
+                    undoing: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        drop(connection);
+
+        for operation in operations {
+            let target = PathBuf::from(&operation.target_directory);
+            let backup = operation.backup_directory.as_deref().map(Path::new);
+            if !operation.completed {
+                rollback_applied_change(&target, backup, operation.was_new, operation.id)?;
+                self.rescan_root(operation.root_id)?;
+                let connection = Connection::open(&self.database_path)?;
+                connection.execute(
+                    "DELETE FROM skill_change_operations WHERE id = ?1 AND completed = 0",
+                    [operation.id],
+                )?;
+            } else if !operation.undone && operation.undoing {
+                apply_undo(&target, backup, operation.was_new, operation.id)?;
+                self.rescan_root(operation.root_id)?;
+                let connection = Connection::open(&self.database_path)?;
+                connection.execute(
+                    "UPDATE skill_change_operations SET undone = 1, undoing = 0 WHERE id = ?1",
+                    [operation.id],
+                )?;
+            }
+        }
+        Ok(())
     }
 
     fn resolve_draft_target(
@@ -444,6 +528,17 @@ impl SkillWorkspace {
             }
         }
     }
+}
+
+struct RecoverableOperation {
+    id: i64,
+    root_id: i64,
+    target_directory: String,
+    backup_directory: Option<String>,
+    was_new: bool,
+    completed: bool,
+    undone: bool,
+    undoing: bool,
 }
 
 fn validation_issue(field: &str, message: impl Into<String>) -> SkillValidationIssue {
@@ -667,6 +762,28 @@ fn rollback_applied_change(
         WorkspaceError::InvalidDraft("保存失败后找不到可恢复的本地备份。".to_owned())
     })?;
     let stage = sibling_work_path(target, "rollback", operation_id)?;
+    remove_path_if_exists(&stage)?;
+    copy_directory(backup, &stage)?;
+    atomic_replace_directory(&stage, target, operation_id)
+}
+
+fn apply_undo(
+    target: &Path,
+    backup: Option<&Path>,
+    was_new: bool,
+    operation_id: i64,
+) -> Result<(), WorkspaceError> {
+    if was_new {
+        let tombstone = sibling_work_path(target, "undo", operation_id)?;
+        if target.symlink_metadata().is_ok() {
+            remove_path_if_exists(&tombstone)?;
+            fs::rename(target, &tombstone)?;
+        }
+        return remove_path_if_exists(&tombstone);
+    }
+    let backup = backup
+        .ok_or_else(|| WorkspaceError::InvalidDraft("编辑操作的本地备份不存在。".to_owned()))?;
+    let stage = sibling_work_path(target, "undo", operation_id)?;
     remove_path_if_exists(&stage)?;
     copy_directory(backup, &stage)?;
     atomic_replace_directory(&stage, target, operation_id)

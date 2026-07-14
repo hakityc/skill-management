@@ -5,6 +5,7 @@ import type {
   SkillClient,
   SkillChangeOutcome,
   SkillChangePlan,
+  SkillChangeRecord,
   SkillDetail,
   SkillDraft,
   SkillDraftValidation,
@@ -34,6 +35,7 @@ export interface SkillGateway {
   planSkillChange(draft: SkillDraft): Promise<SkillChangePlan>;
   executeSkillChange(planId: number): Promise<SkillChangeOutcome>;
   undoSkillChange(operationId: number): Promise<SkillChangeOutcome>;
+  latestUndoableSkillChange(): Promise<SkillChangeRecord | null>;
 }
 
 interface SkillManagerAppProps {
@@ -232,6 +234,7 @@ function SkillLibrary({
   const [detailError, setDetailError] = useState<string | null>(null);
   const [preview, setPreview] = useState<SkillFilePreview | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [previewInstanceId, setPreviewInstanceId] = useState<string | null>(null);
   const [editorDraft, setEditorDraft] = useState<SkillDraft | null>(null);
   const [validation, setValidation] = useState<SkillDraftValidation | null>(null);
   const [changePlan, setChangePlan] = useState<SkillChangePlan | null>(null);
@@ -306,12 +309,34 @@ function SkillLibrary({
   }, [selectedInstanceId, snapshot.instances]);
 
   useEffect(() => {
+    let active = true;
+    gateway
+      .latestUndoableSkillChange()
+      .then((record) => {
+        if (active) setLastOperationId(record?.operationId ?? null);
+      })
+      .catch((reason: unknown) => {
+        if (active) setEditError(readableError(reason));
+      });
+    return () => {
+      active = false;
+    };
+  }, [gateway]);
+
+  useEffect(() => {
     if (!selectedInstanceId) {
       setDetail(null);
+      setPreview(null);
+      setPreviewPath(null);
+      setPreviewInstanceId(null);
       return;
     }
     let active = true;
+    setDetail(null);
     setDetailError(null);
+    setPreview(null);
+    setPreviewPath(null);
+    setPreviewInstanceId(null);
     gateway
       .skillDetail(selectedInstanceId)
       .then((nextDetail) => {
@@ -330,6 +355,7 @@ function SkillLibrary({
     setDetailError(null);
     try {
       const nextPreview = await gateway.readSkillFile(selectedInstanceId, relativePath);
+      setPreviewInstanceId(selectedInstanceId);
       setPreviewPath(relativePath);
       setPreview(nextPreview);
     } catch (reason) {
@@ -351,7 +377,19 @@ function SkillLibrary({
         markdownBody: stripFrontmatter(skillFile.content),
         fileChanges: fileChange ? [fileChange] : [],
       });
-      setValidation(null);
+      setValidation(
+        detail.instance.status === "needsRepair"
+          ? {
+              valid: false,
+              issues: [
+                {
+                  field: "frontmatter",
+                  message: `SKILL.md 元数据需要修复：${detail.instance.error ?? "frontmatter 结构错误"}。保存时会按表单重建元数据。`,
+                },
+              ],
+            }
+          : null,
+      );
       setChangePlan(null);
     } catch (reason) {
       setEditError(readableError(reason));
@@ -367,7 +405,7 @@ function SkillLibrary({
       target: { kind: "new", rootId: root.id, relativePath: "new-skill" },
       name: "new-skill",
       description: "",
-      markdownBody: "# New Skill\n\n在这里描述 Skill 的使用方式。\n",
+      markdownBody: "# 新 Skill\n\n在这里描述 Skill 的使用方式。\n",
       fileChanges: [],
     });
     setValidation(null);
@@ -640,8 +678,8 @@ function SkillLibrary({
           <SkillDetailPanel
             detail={detail}
             error={detailError}
-            preview={preview}
-            previewPath={previewPath}
+            preview={previewInstanceId === selectedInstanceId ? preview : null}
+            previewPath={previewInstanceId === selectedInstanceId ? previewPath : null}
             busy={editBusy}
             onPreview={previewFile}
             onEdit={() => openExistingEditor()}
@@ -1031,6 +1069,12 @@ function SkillDetailPanel({
             <pre>{preview.content}</pre>
           ) : (
             <div className="binary-preview">
+              {preview.mediaType && preview.previewContent ? (
+                <img
+                  src={binaryPreviewDataUrl(preview.mediaType, preview.previewContent)}
+                  alt={`附件预览 ${previewPath}`}
+                />
+              ) : null}
               <strong>二进制附件</strong>
               <span>{formatBytes(preview.size)}，不会以文本方式打开。</span>
             </div>
@@ -1216,7 +1260,19 @@ function SkillEditor({
 }
 
 function stripFrontmatter(content: string) {
-  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").replace(/^\r?\n/, "");
+  const complete = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  if (complete) return content.slice(complete[0].length).replace(/^\r?\n/, "");
+  if (content.startsWith("---\n") || content.startsWith("---\r\n")) {
+    const bodyStart = content.search(/\r?\n\r?\n/);
+    return bodyStart >= 0 ? content.slice(bodyStart).replace(/^\s+/, "") : "";
+  }
+  return content;
+}
+
+function binaryPreviewDataUrl(mediaType: string, content: number[]) {
+  let binary = "";
+  for (const byte of content) binary += String.fromCharCode(byte);
+  return `data:${mediaType};base64,${window.btoa(binary)}`;
 }
 
 function skillClientName(client: SkillClient) {

@@ -117,6 +117,7 @@ button:focus-visible { outline: 3px solid rgb(47 109 226 / 24%); outline-offset:
 .replace-binary-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 .file-preview pre, .markdown-preview pre { overflow: auto; max-height: 190px; margin: 0; padding: 11px; border: 1px solid #dce2dc; border-radius: 7px; background: #fff; color: #37443d; font-family: "SFMono-Regular", monospace; font-size: 9px; line-height: 1.55; white-space: pre-wrap; }
 .binary-preview { display: grid; gap: 4px; padding: 18px; border: 1px dashed #ccd5ce; border-radius: 8px; color: #7b857e; font-size: 9px; text-align: center; }
+.binary-preview img { width: 100%; max-height: 220px; margin-bottom: 8px; border-radius: 6px; object-fit: contain; background: #eef1ee; }
 .binary-preview strong { color: #405048; }
 
 .editor-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(17 26 21 / 42%); backdrop-filter: blur(3px); }

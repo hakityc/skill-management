@@ -104,7 +104,12 @@ export interface SkillDetail {
 
 export type SkillFilePreview =
   | { kind: "text"; content: string }
-  | { kind: "binary"; size: number };
+  | {
+      kind: "binary";
+      size: number;
+      mediaType: string | null;
+      previewContent: number[] | null;
+    };
 
 export type SkillDraftTarget =
   | { kind: "existing"; instanceId: string }
@@ -155,4 +160,10 @@ export interface SkillChangePlan {
 export interface SkillChangeOutcome {
   operationId: number;
   snapshot: WorkspaceSnapshot;
+}
+
+export interface SkillChangeRecord {
+  operationId: number;
+  targetDirectory: string;
+  createdAt: number;
 }

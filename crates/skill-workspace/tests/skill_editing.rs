@@ -1,5 +1,6 @@
 use std::{fs, os::unix::fs::symlink};
 
+use rusqlite::Connection;
 use skill_workspace::{
     SkillChangeKind, SkillDraft, SkillDraftTarget, SkillFileDraftChange, SkillFileDraftOperation,
     SkillWorkspace,
@@ -40,6 +41,23 @@ fn personal_user_validates_a_draft_and_previews_an_immutable_change_plan() {
             .issues
             .iter()
             .any(|issue| issue.field == "description" && issue.message.contains("描述"))
+    );
+    let unsafe_reserved_path = SkillDraft {
+        file_changes: vec![SkillFileDraftChange {
+            relative_path: "./SKILL.md".to_owned(),
+            operation: SkillFileDraftOperation::WriteText {
+                content: "绕过表单".to_owned(),
+            },
+        }],
+        ..invalid.clone()
+    };
+    let validation = workspace.validate_skill_draft(&unsafe_reserved_path);
+    assert!(!validation.valid);
+    assert!(
+        validation
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("路径不安全"))
     );
 
     let draft = SkillDraft {
@@ -101,8 +119,8 @@ fn personal_user_confirms_an_atomic_edit_and_undoes_it_with_the_index_restored()
     fs::write(directory.join("SKILL.md"), original_document).expect("写入 SKILL.md");
     fs::write(directory.join("asset.bin"), [0, 1, 2]).expect("写入二进制附件");
     fs::write(directory.join("obsolete.txt"), "待删除\n").expect("写入待删除文件");
-    let workspace = SkillWorkspace::open(sandbox.path().join("app/index.sqlite3"))
-        .expect("打开 SkillWorkspace");
+    let database_path = sandbox.path().join("app/index.sqlite3");
+    let workspace = SkillWorkspace::open(&database_path).expect("打开 SkillWorkspace");
     let snapshot = workspace.add_root(&root).expect("扫描根目录");
     let instance_id = snapshot.instances[0].id.clone();
     let plan = workspace
@@ -152,6 +170,21 @@ fn personal_user_confirms_an_atomic_edit_and_undoes_it_with_the_index_restored()
             .total,
         1
     );
+
+    assert!(
+        fs::read_dir(sandbox.path().join("app/backups"))
+            .expect("读取本地备份目录")
+            .next()
+            .is_some(),
+        "保存后应留下可撤销的本地备份"
+    );
+    drop(workspace);
+    let workspace = SkillWorkspace::open(&database_path).expect("重启后重新打开 SkillWorkspace");
+    let latest = workspace
+        .latest_undoable_skill_change()
+        .expect("读取最近操作记录")
+        .expect("存在最近可撤销编辑");
+    assert_eq!(latest.operation_id, outcome.operation_id);
 
     workspace
         .undo_skill_change(outcome.operation_id)
@@ -304,4 +337,118 @@ fn stale_change_plan_never_overwrites_an_external_file_change() {
         external_document
     );
     assert!(!directory.join("new.md").exists());
+}
+
+#[test]
+fn reopening_workspace_rolls_back_an_interrupted_save_finalization() {
+    let sandbox = tempdir().expect("创建临时工作区");
+    let root = sandbox.path().join("skills");
+    let directory = root.join("api-review");
+    fs::create_dir_all(&directory).expect("创建 Skill 目录");
+    let original_document = "---\nname: api-review\ndescription: 原始描述。\n---\n\n# 原始正文\n";
+    fs::write(directory.join("SKILL.md"), original_document).expect("写入原始文件");
+    let database_path = sandbox.path().join("app/index.sqlite3");
+    let workspace = SkillWorkspace::open(&database_path).expect("打开 SkillWorkspace");
+    let snapshot = workspace.add_root(&root).expect("扫描根目录");
+    let plan = workspace
+        .plan_skill_change(&SkillDraft {
+            target: SkillDraftTarget::Existing {
+                instance_id: snapshot.instances[0].id.clone(),
+            },
+            name: "api-review".to_owned(),
+            description: "中断的描述。".to_owned(),
+            markdown_body: "# 中断的正文\n".to_owned(),
+            file_changes: vec![],
+        })
+        .expect("生成变化计划");
+    let outcome = workspace
+        .execute_skill_change(plan.id)
+        .expect("执行变化计划");
+    Connection::open(&database_path)
+        .unwrap()
+        .execute(
+            "UPDATE skill_change_operations SET completed = 0 WHERE id = ?1",
+            [outcome.operation_id],
+        )
+        .expect("模拟保存记录最终化中断");
+    drop(workspace);
+
+    let recovered = SkillWorkspace::open(&database_path).expect("启动时自动恢复中断保存");
+    assert_eq!(
+        fs::read_to_string(directory.join("SKILL.md")).unwrap(),
+        original_document
+    );
+    assert!(
+        recovered
+            .latest_undoable_skill_change()
+            .expect("读取操作记录")
+            .is_none()
+    );
+    assert_eq!(
+        recovered
+            .search_skills(&skill_workspace::SkillQuery {
+                text: "中断的正文".to_owned(),
+                ..skill_workspace::SkillQuery::default()
+            })
+            .expect("检索恢复后的索引")
+            .total,
+        0
+    );
+}
+
+#[test]
+fn reopening_workspace_completes_an_interrupted_undo() {
+    let sandbox = tempdir().expect("创建临时工作区");
+    let root = sandbox.path().join("skills");
+    let directory = root.join("api-review");
+    fs::create_dir_all(&directory).expect("创建 Skill 目录");
+    let original_document = "---\nname: api-review\ndescription: 原始描述。\n---\n\n# 原始正文\n";
+    fs::write(directory.join("SKILL.md"), original_document).expect("写入原始文件");
+    let database_path = sandbox.path().join("app/index.sqlite3");
+    let workspace = SkillWorkspace::open(&database_path).expect("打开 SkillWorkspace");
+    let snapshot = workspace.add_root(&root).expect("扫描根目录");
+    let plan = workspace
+        .plan_skill_change(&SkillDraft {
+            target: SkillDraftTarget::Existing {
+                instance_id: snapshot.instances[0].id.clone(),
+            },
+            name: "api-review".to_owned(),
+            description: "编辑后的描述。".to_owned(),
+            markdown_body: "# 编辑后的正文\n".to_owned(),
+            file_changes: vec![],
+        })
+        .expect("生成变化计划");
+    let outcome = workspace
+        .execute_skill_change(plan.id)
+        .expect("执行变化计划");
+    Connection::open(&database_path)
+        .unwrap()
+        .execute(
+            "UPDATE skill_change_operations SET undoing = 1 WHERE id = ?1",
+            [outcome.operation_id],
+        )
+        .expect("模拟撤销中断");
+    drop(workspace);
+
+    let recovered = SkillWorkspace::open(&database_path).expect("启动时完成中断撤销");
+    assert_eq!(
+        fs::read_to_string(directory.join("SKILL.md")).unwrap(),
+        original_document
+    );
+    assert!(
+        recovered
+            .latest_undoable_skill_change()
+            .expect("读取操作记录")
+            .is_none()
+    );
+    assert_eq!(
+        recovered
+            .search_skills(&skill_workspace::SkillQuery {
+                text: "编辑后的正文".to_owned(),
+                ..skill_workspace::SkillQuery::default()
+            })
+            .expect("检索撤销后的索引")
+            .total,
+        0
+    );
 }

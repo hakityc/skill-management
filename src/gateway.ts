@@ -6,6 +6,7 @@ import type {
   SkillQuery,
   SkillChangeOutcome,
   SkillChangePlan,
+  SkillChangeRecord,
   SkillDetail,
   SkillDraft,
   SkillDraftValidation,
@@ -50,5 +51,7 @@ export function createTauriSkillGateway(): SkillGateway {
       invoke<SkillChangeOutcome>("execute_skill_change", { planId }),
     undoSkillChange: (operationId) =>
       invoke<SkillChangeOutcome>("undo_skill_change", { operationId }),
+    latestUndoableSkillChange: () =>
+      invoke<SkillChangeRecord | null>("latest_undoable_skill_change"),
   };
 }

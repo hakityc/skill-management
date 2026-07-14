@@ -41,8 +41,14 @@ pub enum SkillFileKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SkillFilePreview {
-    Text { content: String },
-    Binary { size: u64 },
+    Text {
+        content: String,
+    },
+    Binary {
+        size: u64,
+        media_type: Option<String>,
+        preview_content: Option<Vec<u8>>,
+    },
 }
 
 impl SkillWorkspace {
@@ -103,9 +109,17 @@ impl SkillWorkspace {
         let bytes = fs::read(&target)?;
         match String::from_utf8(bytes) {
             Ok(content) => Ok(SkillFilePreview::Text { content }),
-            Err(error) => Ok(SkillFilePreview::Binary {
-                size: error.as_bytes().len() as u64,
-            }),
+            Err(error) => {
+                let bytes = error.into_bytes();
+                let media_type = previewable_media_type(&bytes).map(str::to_owned);
+                let preview_content = (media_type.is_some() && bytes.len() <= 5 * 1024 * 1024)
+                    .then_some(bytes.clone());
+                Ok(SkillFilePreview::Binary {
+                    size: bytes.len() as u64,
+                    media_type,
+                    preview_content,
+                })
+            }
         }
     }
 
@@ -179,7 +193,10 @@ pub(crate) fn safe_relative_path(path: &str) -> Result<PathBuf, WorkspaceError> 
         || path.components().any(|component| {
             matches!(
                 component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                Component::CurDir
+                    | Component::ParentDir
+                    | Component::RootDir
+                    | Component::Prefix(_)
             )
         })
     {
@@ -188,6 +205,20 @@ pub(crate) fn safe_relative_path(path: &str) -> Result<PathBuf, WorkspaceError> 
         ));
     }
     Ok(path.to_path_buf())
+}
+
+fn previewable_media_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 fn split_terms(value: &str) -> Vec<String> {

@@ -32,6 +32,7 @@ const unavailableEditingMethods: Pick<
   | "planSkillChange"
   | "executeSkillChange"
   | "undoSkillChange"
+  | "latestUndoableSkillChange"
 > = {
   skillDetail: async () => {
     throw new Error("当前测试不读取详情");
@@ -47,6 +48,7 @@ const unavailableEditingMethods: Pick<
   undoSkillChange: async () => {
     throw new Error("当前测试不执行撤销");
   },
+  latestUndoableSkillChange: async () => null,
 };
 
 describe("Skill 管理器", () => {
@@ -339,6 +341,17 @@ describe("Skill 管理器", () => {
       createdAt: 1,
       modifiedAt: 2,
     };
+    const secondInstance = {
+      ...instance,
+      id: "release-notes",
+      name: "release-notes",
+      description: "整理发布说明。",
+      relativePath: "release-notes",
+      skillFilePath: "/Users/example/.codex/skills/release-notes/SKILL.md",
+      realPath: "/Users/example/.codex/skills/release-notes",
+      status: "needsRepair" as const,
+      error: "frontmatter 缺少结束分隔线",
+    };
     const snapshot: WorkspaceSnapshot = {
       authorizedRoot: "/Users/example/.codex/skills",
       roots: [
@@ -350,7 +363,7 @@ describe("Skill 管理器", () => {
           recoveryHint: null,
         },
       ],
-      instances: [instance],
+      instances: [instance, secondInstance],
     };
     const detail: SkillDetail = {
       instance,
@@ -369,6 +382,14 @@ describe("Skill 管理器", () => {
         { relativePath: "preview.png", kind: "binary", size: 120, modifiedAt: 2 },
       ],
     };
+    const secondDetail: SkillDetail = {
+      ...detail,
+      instance: secondInstance,
+      fileCount: 1,
+      tags: [],
+      skillGroups: [],
+      files: [{ relativePath: "SKILL.md", kind: "text", size: 60, modifiedAt: 2 }],
+    };
     let plannedDescription: string | null = null;
     let executed = false;
     let undone = false;
@@ -380,16 +401,24 @@ describe("Skill 管理器", () => {
       searchSkills: async () => ({ instances: snapshot.instances, total: 1 }),
       loadViewPreferences: async () => defaultViewPreferences,
       saveViewPreferences: async () => {},
-      skillDetail: async () => detail,
-      async readSkillFile(_instanceId: string, relativePath: string) {
+      skillDetail: async (instanceId: string) =>
+        instanceId === secondInstance.id ? secondDetail : detail,
+      async readSkillFile(instanceId: string, relativePath: string) {
         if (relativePath === "preview.png") {
-          return { kind: "binary" as const, size: 120 };
+          return {
+            kind: "binary" as const,
+            size: 120,
+            mediaType: "image/png",
+            previewContent: [0x89, 0x50, 0x4e, 0x47],
+          };
         }
         return {
           kind: "text" as const,
           content:
             relativePath === "SKILL.md"
-              ? "---\nname: api-review\ndescription: 旧描述。\n---\n\n# API Review\n"
+              ? instanceId === secondInstance.id
+                ? "---\nname: release-notes\ndescription: 整理发布说明。\n\n# 发布说明\n"
+                : "---\nname: api-review\ndescription: 旧描述。\n---\n\n# API Review\n"
               : "检查幂等性。\n",
         };
       },
@@ -418,6 +447,7 @@ describe("Skill 管理器", () => {
         undone = true;
         return { operationId: 9, snapshot };
       },
+      latestUndoableSkillChange: async () => null,
     };
 
     render(<SkillManagerApp gateway={gateway} />);
@@ -427,8 +457,19 @@ describe("Skill 管理器", () => {
     expect(screen.getByText("#安全审计")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "预览 references/guide.md" }));
     expect(await screen.findByText("检查幂等性。")).toBeTruthy();
+    await userEvent.click(screen.getByRole("listitem", { name: "release-notes，需要修复" }));
+    expect(await screen.findByRole("heading", { name: "release-notes" })).toBeTruthy();
+    expect(screen.queryByText("检查幂等性。")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "编辑 Skill" }));
+    expect(
+      await screen.findByText(/SKILL\.md 元数据需要修复：frontmatter 缺少结束分隔线/),
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "关闭" }));
+    await userEvent.click(screen.getByRole("listitem", { name: "api-review，正常" }));
+    expect(await screen.findByRole("heading", { name: "api-review" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "预览 preview.png" }));
     expect(await screen.findByText("二进制附件")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "附件预览 preview.png" })).toBeTruthy();
     expect(screen.getByLabelText("替换 preview.png")).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: "编辑 Skill" }));

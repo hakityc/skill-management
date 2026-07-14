@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 
 use skill_workspace::{
-    SkillChangeOutcome, SkillChangePlan, SkillDetail, SkillDraft, SkillDraftValidation,
-    SkillFilePreview, SkillQuery, SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences,
-    WorkspaceSnapshot,
+    SkillChangeOutcome, SkillChangePlan, SkillChangeRecord, SkillDetail, SkillDraft,
+    SkillDraftValidation, SkillFilePreview, SkillQuery, SkillSearchResult, SkillWorkspace,
+    SkillWorkspaceViewPreferences, WorkspaceSnapshot,
 };
 use tauri::Manager;
 
@@ -150,6 +150,16 @@ fn undo_skill_change(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn latest_undoable_skill_change(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<SkillChangeRecord>, String> {
+    state
+        .workspace
+        .latest_undoable_skill_change()
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -175,7 +185,8 @@ pub fn run() {
             validate_skill_draft,
             plan_skill_change,
             execute_skill_change,
-            undo_skill_change
+            undo_skill_change,
+            latest_undoable_skill_change
         ])
         .run(tauri::generate_context!())
         .expect("启动 Skill 管理器失败");
