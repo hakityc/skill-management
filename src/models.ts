@@ -83,3 +83,76 @@ export interface WorkspaceSnapshot {
   roots: SkillRoot[];
   instances: SkillInstance[];
 }
+
+export type SkillFileKind = "directory" | "text" | "binary" | "symbolicLink";
+
+export interface SkillFileEntry {
+  relativePath: string;
+  kind: SkillFileKind;
+  size: number;
+  modifiedAt: number;
+}
+
+export interface SkillDetail {
+  instance: SkillInstance;
+  root: SkillRoot;
+  tags: string[];
+  skillGroups: string[];
+  files: SkillFileEntry[];
+  fileCount: number;
+}
+
+export type SkillFilePreview =
+  | { kind: "text"; content: string }
+  | { kind: "binary"; size: number };
+
+export type SkillDraftTarget =
+  | { kind: "existing"; instanceId: string }
+  | { kind: "new"; rootId: number; relativePath: string };
+
+export type SkillFileDraftOperation =
+  | { kind: "writeText"; content: string }
+  | { kind: "replaceBinary"; content: number[] }
+  | { kind: "delete" };
+
+export interface SkillFileDraftChange {
+  relativePath: string;
+  operation: SkillFileDraftOperation;
+}
+
+export interface SkillDraft {
+  target: SkillDraftTarget;
+  name: string;
+  description: string;
+  markdownBody: string;
+  fileChanges: SkillFileDraftChange[];
+}
+
+export interface SkillValidationIssue {
+  field: string;
+  message: string;
+}
+
+export interface SkillDraftValidation {
+  valid: boolean;
+  issues: SkillValidationIssue[];
+}
+
+export type SkillChangeKind = "create" | "overwrite" | "delete";
+
+export interface SkillPlannedChange {
+  relativePath: string;
+  kind: SkillChangeKind;
+  binary: boolean;
+  size: number;
+}
+
+export interface SkillChangePlan {
+  id: number;
+  changes: SkillPlannedChange[];
+}
+
+export interface SkillChangeOutcome {
+  operationId: number;
+  snapshot: WorkspaceSnapshot;
+}

@@ -2,8 +2,10 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { SkillManagerApp } from "./App";
+import { SkillManagerApp, type SkillGateway } from "./App";
 import type {
+  SkillDetail,
+  SkillDraft,
   SkillQuery,
   SkillWorkspaceViewPreferences,
   WorkspaceSnapshot,
@@ -20,6 +22,31 @@ const defaultViewPreferences: SkillWorkspaceViewPreferences = {
   },
   sort: { field: "name", direction: "asc" },
   density: "compact",
+};
+
+const unavailableEditingMethods: Pick<
+  SkillGateway,
+  | "skillDetail"
+  | "readSkillFile"
+  | "validateSkillDraft"
+  | "planSkillChange"
+  | "executeSkillChange"
+  | "undoSkillChange"
+> = {
+  skillDetail: async () => {
+    throw new Error("当前测试不读取详情");
+  },
+  readSkillFile: async () => {
+    throw new Error("当前测试不读取文件");
+  },
+  validateSkillDraft: async () => ({ valid: true, issues: [] }),
+  planSkillChange: async () => ({ id: 1, changes: [] }),
+  executeSkillChange: async () => {
+    throw new Error("当前测试不执行编辑");
+  },
+  undoSkillChange: async () => {
+    throw new Error("当前测试不执行撤销");
+  },
 };
 
 describe("Skill 管理器", () => {
@@ -76,6 +103,7 @@ describe("Skill 管理器", () => {
       ],
     };
     const gateway = {
+      ...unavailableEditingMethods,
       loadSnapshot: async () => emptySnapshot,
       chooseAndAuthorizeRoot: async () => scannedSnapshot,
       rescanRoot: async () => scannedSnapshot,
@@ -143,6 +171,7 @@ describe("Skill 管理器", () => {
     let rescanned = false;
     let removed = false;
     const gateway = {
+      ...unavailableEditingMethods,
       loadSnapshot: async () => initial,
       chooseAndAuthorizeRoot: async () => null,
       async rescanRoot(rootId: number) {
@@ -228,6 +257,7 @@ describe("Skill 管理器", () => {
     const queries: SkillQuery[] = [];
     const savedPreferences: SkillWorkspaceViewPreferences[] = [];
     const gateway = {
+      ...unavailableEditingMethods,
       loadSnapshot: async () => snapshot,
       chooseAndAuthorizeRoot: async () => null,
       rescanRoot: async () => snapshot,
@@ -290,5 +320,129 @@ describe("Skill 管理器", () => {
       expect(lastQuery?.filters.repairStatus).toBe("any");
       expect(lastQuery?.filters.duplicateCheckStatuses).toEqual([]);
     });
+  });
+
+  test("个人用户查看文件详情、校验编辑、确认变化计划并撤销", async () => {
+    const instance = {
+      id: "api-review",
+      rootId: 1,
+      name: "api-review",
+      description: "旧描述。",
+      relativePath: "api-review",
+      skillFilePath: "/Users/example/.codex/skills/api-review/SKILL.md",
+      linkPath: null,
+      realPath: "/Users/example/.codex/skills/api-review",
+      status: "ready" as const,
+      error: null,
+      client: "codex" as const,
+      duplicateCheckStatus: "none" as const,
+      createdAt: 1,
+      modifiedAt: 2,
+    };
+    const snapshot: WorkspaceSnapshot = {
+      authorizedRoot: "/Users/example/.codex/skills",
+      roots: [
+        {
+          id: 1,
+          path: "/Users/example/.codex/skills",
+          status: "ready",
+          error: null,
+          recoveryHint: null,
+        },
+      ],
+      instances: [instance],
+    };
+    const detail: SkillDetail = {
+      instance,
+      root: snapshot.roots[0],
+      tags: ["API", "安全审计"],
+      skillGroups: ["支付项目"],
+      fileCount: 3,
+      files: [
+        { relativePath: "SKILL.md", kind: "text", size: 80, modifiedAt: 2 },
+        {
+          relativePath: "references/guide.md",
+          kind: "text",
+          size: 18,
+          modifiedAt: 2,
+        },
+        { relativePath: "preview.png", kind: "binary", size: 120, modifiedAt: 2 },
+      ],
+    };
+    let plannedDescription: string | null = null;
+    let executed = false;
+    let undone = false;
+    const gateway = {
+      loadSnapshot: async () => snapshot,
+      chooseAndAuthorizeRoot: async () => null,
+      rescanRoot: async () => snapshot,
+      removeRoot: async () => snapshot,
+      searchSkills: async () => ({ instances: snapshot.instances, total: 1 }),
+      loadViewPreferences: async () => defaultViewPreferences,
+      saveViewPreferences: async () => {},
+      skillDetail: async () => detail,
+      async readSkillFile(_instanceId: string, relativePath: string) {
+        if (relativePath === "preview.png") {
+          return { kind: "binary" as const, size: 120 };
+        }
+        return {
+          kind: "text" as const,
+          content:
+            relativePath === "SKILL.md"
+              ? "---\nname: api-review\ndescription: 旧描述。\n---\n\n# API Review\n"
+              : "检查幂等性。\n",
+        };
+      },
+      async validateSkillDraft(draft: SkillDraft) {
+        return draft.description
+          ? { valid: true, issues: [] }
+          : {
+              valid: false,
+              issues: [{ field: "description", message: "Skill 描述不能为空。" }],
+            };
+      },
+      async planSkillChange(draft: SkillDraft) {
+        plannedDescription = draft.description;
+        return {
+          id: 7,
+          changes: [
+            { relativePath: "SKILL.md", kind: "overwrite" as const, binary: false, size: 99 },
+          ],
+        };
+      },
+      async executeSkillChange() {
+        executed = true;
+        return { operationId: 9, snapshot };
+      },
+      async undoSkillChange() {
+        undone = true;
+        return { operationId: 9, snapshot };
+      },
+    };
+
+    render(<SkillManagerApp gateway={gateway} />);
+
+    expect(await screen.findByRole("heading", { name: "api-review" })).toBeTruthy();
+    expect(screen.getByText("3 个文件")).toBeTruthy();
+    expect(screen.getByText("#安全审计")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "预览 references/guide.md" }));
+    expect(await screen.findByText("检查幂等性。")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "预览 preview.png" }));
+    expect(await screen.findByText("二进制附件")).toBeTruthy();
+    expect(screen.getByLabelText("替换 preview.png")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "编辑 Skill" }));
+    const description = await screen.findByRole("textbox", { name: "Skill 描述" });
+    await userEvent.clear(description);
+    await userEvent.click(screen.getByRole("button", { name: "预览变化" }));
+    expect(await screen.findByText("Skill 描述不能为空。")).toBeTruthy();
+    await userEvent.type(description, "审查 API 与安全边界。");
+    await userEvent.click(screen.getByRole("button", { name: "预览变化" }));
+    expect(await screen.findByText("覆盖 SKILL.md")).toBeTruthy();
+    expect(plannedDescription).toBe("审查 API 与安全边界。");
+    await userEvent.click(screen.getByRole("button", { name: "确认保存" }));
+    expect(executed).toBe(true);
+    await userEvent.click(await screen.findByRole("button", { name: "撤销最近编辑" }));
+    expect(undone).toBe(true);
   });
 });

@@ -4,6 +4,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { SkillGateway } from "./App";
 import type {
   SkillQuery,
+  SkillChangeOutcome,
+  SkillChangePlan,
+  SkillDetail,
+  SkillDraft,
+  SkillDraftValidation,
+  SkillFilePreview,
   SkillSearchResult,
   SkillWorkspaceViewPreferences,
   WorkspaceSnapshot,
@@ -33,5 +39,16 @@ export function createTauriSkillGateway(): SkillGateway {
       invoke<SkillWorkspaceViewPreferences>("load_view_preferences"),
     saveViewPreferences: (preferences: SkillWorkspaceViewPreferences) =>
       invoke<void>("save_view_preferences", { preferences }),
+    skillDetail: (instanceId) => invoke<SkillDetail>("skill_detail", { instanceId }),
+    readSkillFile: (instanceId, relativePath) =>
+      invoke<SkillFilePreview>("read_skill_file", { instanceId, relativePath }),
+    validateSkillDraft: (draft: SkillDraft) =>
+      invoke<SkillDraftValidation>("validate_skill_draft", { draft }),
+    planSkillChange: (draft: SkillDraft) =>
+      invoke<SkillChangePlan>("plan_skill_change", { draft }),
+    executeSkillChange: (planId) =>
+      invoke<SkillChangeOutcome>("execute_skill_change", { planId }),
+    undoSkillChange: (operationId) =>
+      invoke<SkillChangeOutcome>("undo_skill_change", { operationId }),
   };
 }

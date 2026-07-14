@@ -3,7 +3,13 @@ import { useEffect, useState } from "react";
 import type {
   DuplicateCheckStatus,
   SkillClient,
+  SkillChangeOutcome,
+  SkillChangePlan,
+  SkillDetail,
+  SkillDraft,
+  SkillDraftValidation,
   SkillFilters,
+  SkillFilePreview,
   SkillInstance,
   SkillQuery,
   SkillRoot,
@@ -22,6 +28,12 @@ export interface SkillGateway {
   searchSkills(query: SkillQuery): Promise<SkillSearchResult>;
   loadViewPreferences(): Promise<SkillWorkspaceViewPreferences>;
   saveViewPreferences(preferences: SkillWorkspaceViewPreferences): Promise<void>;
+  skillDetail(instanceId: string): Promise<SkillDetail>;
+  readSkillFile(instanceId: string, relativePath: string): Promise<SkillFilePreview>;
+  validateSkillDraft(draft: SkillDraft): Promise<SkillDraftValidation>;
+  planSkillChange(draft: SkillDraft): Promise<SkillChangePlan>;
+  executeSkillChange(planId: number): Promise<SkillChangeOutcome>;
+  undoSkillChange(operationId: number): Promise<SkillChangeOutcome>;
 }
 
 interface SkillManagerAppProps {
@@ -116,6 +128,7 @@ export function SkillManagerApp({ gateway }: SkillManagerAppProps) {
             gateway={gateway}
             snapshot={snapshot}
             onManageRoots={() => setView("roots")}
+            onSnapshotChange={setSnapshot}
           />
         )
       ) : (
@@ -198,10 +211,12 @@ function SkillLibrary({
   gateway,
   snapshot,
   onManageRoots,
+  onSnapshotChange,
 }: {
   gateway: SkillGateway;
   snapshot: WorkspaceSnapshot;
   onManageRoots(): void;
+  onSnapshotChange(snapshot: WorkspaceSnapshot): void;
 }) {
   const [queryText, setQueryText] = useState("");
   const [preferences, setPreferences] = useState(DEFAULT_VIEW_PREFERENCES);
@@ -210,6 +225,19 @@ function SkillLibrary({
   const [total, setTotal] = useState(snapshot.instances.length);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(
+    snapshot.instances[0]?.id ?? null,
+  );
+  const [detail, setDetail] = useState<SkillDetail | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<SkillFilePreview | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [editorDraft, setEditorDraft] = useState<SkillDraft | null>(null);
+  const [validation, setValidation] = useState<SkillDraftValidation | null>(null);
+  const [changePlan, setChangePlan] = useState<SkillChangePlan | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [lastOperationId, setLastOperationId] = useState<number | null>(null);
   const repairCount = snapshot.instances.filter(
     (skill) => skill.status === "needsRepair",
   ).length;
@@ -269,6 +297,134 @@ function SkillLibrary({
       window.clearTimeout(timer);
     };
   }, [gateway, preferences.filters, preferences.sort, preferencesReady, queryText, snapshot]);
+
+  useEffect(() => {
+    if (selectedInstanceId && snapshot.instances.some((skill) => skill.id === selectedInstanceId)) {
+      return;
+    }
+    setSelectedInstanceId(snapshot.instances[0]?.id ?? null);
+  }, [selectedInstanceId, snapshot.instances]);
+
+  useEffect(() => {
+    if (!selectedInstanceId) {
+      setDetail(null);
+      return;
+    }
+    let active = true;
+    setDetailError(null);
+    gateway
+      .skillDetail(selectedInstanceId)
+      .then((nextDetail) => {
+        if (active) setDetail(nextDetail);
+      })
+      .catch((reason: unknown) => {
+        if (active) setDetailError(readableError(reason));
+      });
+    return () => {
+      active = false;
+    };
+  }, [gateway, selectedInstanceId, snapshot]);
+
+  async function previewFile(relativePath: string) {
+    if (!selectedInstanceId) return;
+    setDetailError(null);
+    try {
+      const nextPreview = await gateway.readSkillFile(selectedInstanceId, relativePath);
+      setPreviewPath(relativePath);
+      setPreview(nextPreview);
+    } catch (reason) {
+      setDetailError(readableError(reason));
+    }
+  }
+
+  async function openExistingEditor(fileChange?: SkillDraft["fileChanges"][number]) {
+    if (!detail) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const skillFile = await gateway.readSkillFile(detail.instance.id, "SKILL.md");
+      if (skillFile.kind !== "text") throw new Error("SKILL.md 不是可编辑的文本文件。");
+      setEditorDraft({
+        target: { kind: "existing", instanceId: detail.instance.id },
+        name: detail.instance.name,
+        description: detail.instance.description,
+        markdownBody: stripFrontmatter(skillFile.content),
+        fileChanges: fileChange ? [fileChange] : [],
+      });
+      setValidation(null);
+      setChangePlan(null);
+    } catch (reason) {
+      setEditError(readableError(reason));
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  function openNewEditor() {
+    const root = snapshot.roots[0];
+    if (!root) return;
+    setEditorDraft({
+      target: { kind: "new", rootId: root.id, relativePath: "new-skill" },
+      name: "new-skill",
+      description: "",
+      markdownBody: "# New Skill\n\n在这里描述 Skill 的使用方式。\n",
+      fileChanges: [],
+    });
+    setValidation(null);
+    setChangePlan(null);
+    setEditError(null);
+  }
+
+  async function previewChanges() {
+    if (!editorDraft) return;
+    setEditBusy(true);
+    setEditError(null);
+    setChangePlan(null);
+    try {
+      const nextValidation = await gateway.validateSkillDraft(editorDraft);
+      setValidation(nextValidation);
+      if (nextValidation.valid) {
+        setChangePlan(await gateway.planSkillChange(editorDraft));
+      }
+    } catch (reason) {
+      setEditError(readableError(reason));
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  async function confirmChanges() {
+    if (!changePlan) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const outcome = await gateway.executeSkillChange(changePlan.id);
+      onSnapshotChange(outcome.snapshot);
+      setLastOperationId(outcome.operationId);
+      setEditorDraft(null);
+      setChangePlan(null);
+      setValidation(null);
+    } catch (reason) {
+      setEditError(readableError(reason));
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  async function undoLastChange() {
+    if (lastOperationId === null) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const outcome = await gateway.undoSkillChange(lastOperationId);
+      onSnapshotChange(outcome.snapshot);
+      setLastOperationId(null);
+    } catch (reason) {
+      setEditError(readableError(reason));
+    } finally {
+      setEditBusy(false);
+    }
+  }
 
   function updateFilters(filters: SkillFilters) {
     setPreferences((current) => ({ ...current, filters }));
@@ -337,9 +493,19 @@ function SkillLibrary({
             <p className="eyebrow">本地资料库</p>
             <h1>全部 Skill</h1>
           </div>
-          <span className="scan-status" aria-live="polite">
-            <i /> {resultStatus}
-          </span>
+          <div className="library-title-actions">
+            <span className="scan-status" aria-live="polite">
+              <i /> {resultStatus}
+            </span>
+            {lastOperationId !== null ? (
+              <button className="secondary-button compact" onClick={undoLastChange} disabled={editBusy}>
+                撤销最近编辑
+              </button>
+            ) : null}
+            <button className="primary-button compact" onClick={openNewEditor}>
+              新建 Skill
+            </button>
+          </div>
         </div>
         <div className="workspace-toolbar">
           <label className={queryText ? "search-control active" : "search-control"}>
@@ -445,26 +611,76 @@ function SkillLibrary({
           ) : null}
         </div>
         {searchError ? <p className="search-error">检索失败：{searchError}</p> : null}
-        <div className={`table-shell ${preferences.density}`}>
-          <div className="table-header" aria-hidden="true">
-            <span>Skill</span>
-            <span>相对路径</span>
-            <span>状态</span>
-          </div>
-          {instances.length ? (
-            <ul className="skill-list" aria-label="本地 Skill">
-              {instances.map((skill) => (
-                <SkillRow key={skill.id} skill={skill} root={rootsById.get(skill.rootId)} />
-              ))}
-            </ul>
-          ) : (
-            <div className="no-results">
-              <strong>没有匹配的 Skill</strong>
-              <span>尝试清空检索词或调整筛选条件。</span>
+        <div className="catalog-workspace">
+          <div className={`table-shell ${preferences.density}`}>
+            <div className="table-header" aria-hidden="true">
+              <span>Skill</span>
+              <span>相对路径</span>
+              <span>状态</span>
             </div>
-          )}
+            {instances.length ? (
+              <ul className="skill-list" aria-label="本地 Skill">
+                {instances.map((skill) => (
+                  <SkillRow
+                    key={skill.id}
+                    skill={skill}
+                    root={rootsById.get(skill.rootId)}
+                    selected={skill.id === selectedInstanceId}
+                    onSelect={() => setSelectedInstanceId(skill.id)}
+                  />
+                ))}
+              </ul>
+            ) : (
+              <div className="no-results">
+                <strong>没有匹配的 Skill</strong>
+                <span>尝试清空检索词或调整筛选条件。</span>
+              </div>
+            )}
+          </div>
+          <SkillDetailPanel
+            detail={detail}
+            error={detailError}
+            preview={preview}
+            previewPath={previewPath}
+            busy={editBusy}
+            onPreview={previewFile}
+            onEdit={() => openExistingEditor()}
+            onEditText={(path, content) =>
+              openExistingEditor({
+                relativePath: path,
+                operation: { kind: "writeText", content },
+              })
+            }
+            onDelete={(path) =>
+              openExistingEditor({ relativePath: path, operation: { kind: "delete" } })
+            }
+            onReplaceBinary={(path, content) =>
+              openExistingEditor({
+                relativePath: path,
+                operation: { kind: "replaceBinary", content },
+              })
+            }
+          />
         </div>
       </section>
+      {editorDraft ? (
+        <SkillEditor
+          draft={editorDraft}
+          roots={snapshot.roots}
+          validation={validation}
+          plan={changePlan}
+          busy={editBusy}
+          error={editError}
+          onChange={(nextDraft) => {
+            setEditorDraft(nextDraft);
+            setValidation(null);
+            setChangePlan(null);
+          }}
+          onClose={() => setEditorDraft(null)}
+          onPreviewChanges={previewChanges}
+          onConfirm={confirmChanges}
+        />
+      ) : null}
     </main>
   );
 }
@@ -645,12 +861,28 @@ function rootStatus(root: SkillRoot) {
   }
 }
 
-function SkillRow({ skill, root }: { skill: SkillInstance; root?: SkillRoot }) {
+function SkillRow({
+  skill,
+  root,
+  selected,
+  onSelect,
+}: {
+  skill: SkillInstance;
+  root?: SkillRoot;
+  selected: boolean;
+  onSelect(): void;
+}) {
   const needsRepair = skill.status === "needsRepair";
   return (
     <li
-      className={needsRepair ? "skill-row repair" : "skill-row"}
+      className={`skill-row${needsRepair ? " repair" : ""}${selected ? " selected" : ""}`}
       aria-label={`${skill.name}，${needsRepair ? "需要修复" : "正常"}`}
+      aria-current={selected ? "true" : undefined}
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") onSelect();
+      }}
     >
       <span className="file-spine" aria-hidden="true" />
       <span className="skill-copy">
@@ -671,6 +903,358 @@ function SkillRow({ skill, root }: { skill: SkillInstance; root?: SkillRoot }) {
       </span>
     </li>
   );
+}
+
+function SkillDetailPanel({
+  detail,
+  error,
+  preview,
+  previewPath,
+  busy,
+  onPreview,
+  onEdit,
+  onEditText,
+  onDelete,
+  onReplaceBinary,
+}: {
+  detail: SkillDetail | null;
+  error: string | null;
+  preview: SkillFilePreview | null;
+  previewPath: string | null;
+  busy: boolean;
+  onPreview(relativePath: string): void;
+  onEdit(): void;
+  onEditText(relativePath: string, content: string): void;
+  onDelete(relativePath: string): void;
+  onReplaceBinary(relativePath: string, content: number[]): void;
+}) {
+  if (error) {
+    return <aside className="skill-detail-panel detail-empty">详情读取失败：{error}</aside>;
+  }
+  if (!detail) {
+    return <aside className="skill-detail-panel detail-empty">选择一个 Skill 查看详情。</aside>;
+  }
+
+  return (
+    <aside className="skill-detail-panel" aria-label="Skill 详情">
+      <div className="detail-heading">
+        <div>
+          <p className="eyebrow">Skill 详情</p>
+          <h2>{detail.instance.name}</h2>
+        </div>
+        <button className="primary-button compact" onClick={onEdit} disabled={busy}>
+          编辑 Skill
+        </button>
+      </div>
+      <p className="detail-description">{detail.instance.description || "暂无描述"}</p>
+      <dl className="detail-metadata">
+        <div>
+          <dt>客户端</dt>
+          <dd>{skillClientName(detail.instance.client)}</dd>
+        </div>
+        <div>
+          <dt>根目录</dt>
+          <dd title={detail.root.path}>{shortRoot(detail.root.path)}</dd>
+        </div>
+        <div>
+          <dt>相对路径</dt>
+          <dd>{detail.instance.relativePath}</dd>
+        </div>
+        <div>
+          <dt>修改时间</dt>
+          <dd>{formatTimestamp(detail.instance.modifiedAt)}</dd>
+        </div>
+      </dl>
+      {detail.tags.length || detail.skillGroups.length ? (
+        <div className="detail-labels">
+          {detail.tags.map((tag) => (
+            <span className="tag-chip" key={tag}>#{tag}</span>
+          ))}
+          {detail.skillGroups.map((group) => (
+            <span className="group-chip" key={group}>{group}</span>
+          ))}
+        </div>
+      ) : null}
+      <section className="file-section" aria-labelledby="file-section-title">
+        <div className="file-section-heading">
+          <h3 id="file-section-title">目录文件</h3>
+          <span>{detail.fileCount} 个文件</span>
+        </div>
+        <ul className="file-tree">
+          {detail.files.map((file) => (
+            <li key={file.relativePath}>
+              <button
+                className={previewPath === file.relativePath ? "file-button active" : "file-button"}
+                aria-label={`预览 ${file.relativePath}`}
+                onClick={() => onPreview(file.relativePath)}
+                disabled={file.kind === "directory" || file.kind === "symbolicLink"}
+              >
+                <span aria-hidden="true">{fileKindIcon(file.kind)}</span>
+                <b>{file.relativePath}</b>
+                <small>{file.kind === "binary" ? formatBytes(file.size) : fileKindName(file.kind)}</small>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
+      {preview && previewPath ? (
+        <section className="file-preview" aria-label={`${previewPath} 预览`}>
+          <div className="preview-heading">
+            <strong>{previewPath}</strong>
+            {previewPath !== "SKILL.md" ? (
+              <span className="preview-actions">
+                {preview.kind === "text" ? (
+                  <button className="text-button inline" onClick={() => onEditText(previewPath, preview.content)}>
+                    编辑此文本文件
+                  </button>
+                ) : (
+                  <label className="replace-binary-button">
+                    替换附件
+                    <input
+                      type="file"
+                      aria-label={`替换 ${previewPath}`}
+                      onChange={async (event) => {
+                        const file = event.target.files?.[0];
+                        if (!file) return;
+                        onReplaceBinary(previewPath, Array.from(new Uint8Array(await file.arrayBuffer())));
+                      }}
+                    />
+                  </label>
+                )}
+                <button className="text-button inline danger-text" onClick={() => onDelete(previewPath)}>
+                  删除文件
+                </button>
+              </span>
+            ) : null}
+          </div>
+          {preview.kind === "text" ? (
+            <pre>{preview.content}</pre>
+          ) : (
+            <div className="binary-preview">
+              <strong>二进制附件</strong>
+              <span>{formatBytes(preview.size)}，不会以文本方式打开。</span>
+            </div>
+          )}
+        </section>
+      ) : null}
+    </aside>
+  );
+}
+
+function SkillEditor({
+  draft,
+  roots,
+  validation,
+  plan,
+  busy,
+  error,
+  onChange,
+  onClose,
+  onPreviewChanges,
+  onConfirm,
+}: {
+  draft: SkillDraft;
+  roots: SkillRoot[];
+  validation: SkillDraftValidation | null;
+  plan: SkillChangePlan | null;
+  busy: boolean;
+  error: string | null;
+  onChange(draft: SkillDraft): void;
+  onClose(): void;
+  onPreviewChanges(): void;
+  onConfirm(): void;
+}) {
+  const newTarget = draft.target.kind === "new" ? draft.target : null;
+  return (
+    <div className="editor-backdrop" role="presentation">
+      <section className="skill-editor" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+        <header className="editor-header">
+          <div>
+            <p className="eyebrow">安全编辑</p>
+            <h2 id="editor-title">{draft.target.kind === "new" ? "新建 Skill" : `编辑 ${draft.name}`}</h2>
+          </div>
+          <button className="secondary-button compact" onClick={onClose}>关闭</button>
+        </header>
+        <div className="editor-grid">
+          <div className="editor-fields">
+            {newTarget ? (
+              <>
+                <label>
+                  <span>根目录</span>
+                  <select
+                    aria-label="新 Skill 根目录"
+                    value={newTarget.rootId}
+                    onChange={(event) =>
+                      onChange({
+                        ...draft,
+                        target: {
+                          ...newTarget,
+                          rootId: Number(event.target.value),
+                        },
+                      })
+                    }
+                  >
+                    {roots.map((root) => <option key={root.id} value={root.id}>{root.path}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>目录名称</span>
+                  <input
+                    aria-label="Skill 目录名称"
+                    value={newTarget.relativePath}
+                    onChange={(event) =>
+                      onChange({
+                        ...draft,
+                        target: { ...newTarget, relativePath: event.target.value },
+                      })
+                    }
+                  />
+                </label>
+              </>
+            ) : null}
+            <label>
+              <span>Skill 名称</span>
+              <input
+                aria-label="Skill 名称"
+                value={draft.name}
+                onChange={(event) => onChange({ ...draft, name: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Skill 描述</span>
+              <textarea
+                aria-label="Skill 描述"
+                rows={3}
+                value={draft.description}
+                onChange={(event) => onChange({ ...draft, description: event.target.value })}
+              />
+            </label>
+            <label className="markdown-field">
+              <span>SKILL.md 正文</span>
+              <textarea
+                aria-label="Markdown 正文"
+                value={draft.markdownBody}
+                onChange={(event) => onChange({ ...draft, markdownBody: event.target.value })}
+              />
+            </label>
+            {draft.fileChanges.map((change, index) =>
+              change.operation.kind === "writeText" ? (
+                <label className="markdown-field" key={`${change.relativePath}-${index}`}>
+                  <span>文本文件 · {change.relativePath}</span>
+                  <textarea
+                    aria-label={`编辑 ${change.relativePath}`}
+                    value={change.operation.content}
+                    onChange={(event) => {
+                      const fileChanges = [...draft.fileChanges];
+                      fileChanges[index] = {
+                        ...change,
+                        operation: { kind: "writeText", content: event.target.value },
+                      };
+                      onChange({ ...draft, fileChanges });
+                    }}
+                  />
+                </label>
+              ) : change.operation.kind === "replaceBinary" ? (
+                <div className="pending-file-change binary" key={`${change.relativePath}-${index}`}>
+                  将替换附件 <code>{change.relativePath}</code>（{formatBytes(change.operation.content.length)}）
+                </div>
+              ) : (
+                <div className="pending-file-change" key={`${change.relativePath}-${index}`}>
+                  将删除 <code>{change.relativePath}</code>
+                </div>
+              ),
+            )}
+          </div>
+          <div className="editor-preview-column">
+            <section className="markdown-preview">
+              <p className="eyebrow">Markdown 预览</p>
+              <h3>{draft.name || "未命名 Skill"}</h3>
+              <p>{draft.description || "填写描述后会显示在这里。"}</p>
+              <pre>{draft.markdownBody}</pre>
+            </section>
+            {validation && !validation.valid ? (
+              <section className="validation-panel" role="alert">
+                <strong>保存前需要修复</strong>
+                <ul>{validation.issues.map((issue) => <li key={`${issue.field}-${issue.message}`}>{issue.message}</li>)}</ul>
+              </section>
+            ) : null}
+            {plan ? (
+              <section className="change-plan" aria-label="不可变变化计划">
+                <div>
+                  <p className="eyebrow">变化计划 #{plan.id}</p>
+                  <strong>确认后一次性写入</strong>
+                </div>
+                <ul>
+                  {plan.changes.map((change) => (
+                    <li key={`${change.kind}-${change.relativePath}`}>
+                      <span className={`change-kind ${change.kind}`}>
+                        {changeKindName(change.kind)} {change.relativePath}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p>写入前会生成本地备份，失败时不会留下部分修改。</p>
+              </section>
+            ) : null}
+            {error ? <p className="editor-error" role="alert">{error}</p> : null}
+          </div>
+        </div>
+        <footer className="editor-footer">
+          <button className="secondary-button" onClick={onClose}>取消</button>
+          <button className="secondary-button" onClick={onPreviewChanges} disabled={busy}>
+            {busy ? "正在检查…" : "预览变化"}
+          </button>
+          {plan ? (
+            <button className="primary-button" onClick={onConfirm} disabled={busy}>
+              {busy ? "正在保存…" : "确认保存"}
+            </button>
+          ) : null}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function stripFrontmatter(content: string) {
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").replace(/^\r?\n/, "");
+}
+
+function skillClientName(client: SkillClient) {
+  return {
+    claude: "Claude",
+    codex: "Codex",
+    gemini: "Gemini",
+    openCode: "OpenCode",
+    hermes: "Hermes",
+    other: "自定义",
+  }[client];
+}
+
+function formatTimestamp(value: number) {
+  const milliseconds = value < 1_000_000_000_000 ? value * 1000 : value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(milliseconds));
+}
+
+function formatBytes(size: number) {
+  return size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KB`;
+}
+
+function fileKindIcon(kind: SkillDetail["files"][number]["kind"]) {
+  return { directory: "▾", text: "¶", binary: "◆", symbolicLink: "↗" }[kind];
+}
+
+function fileKindName(kind: SkillDetail["files"][number]["kind"]) {
+  return { directory: "目录", text: "文本", binary: "附件", symbolicLink: "链接" }[kind];
+}
+
+function changeKindName(kind: SkillChangePlan["changes"][number]["kind"]) {
+  return { create: "新增", overwrite: "覆盖", delete: "删除" }[kind];
 }
 
 function clientName(path: string) {

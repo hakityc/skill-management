@@ -1,5 +1,15 @@
 //! 本地 Skill 管理的最高层应用接缝。
 
+mod detail;
+mod edit;
+
+pub use detail::{SkillDetail, SkillFileEntry, SkillFileKind, SkillFilePreview};
+pub use edit::{
+    SkillChangeKind, SkillChangeOutcome, SkillChangePlan, SkillDraft, SkillDraftTarget,
+    SkillDraftValidation, SkillFileDraftChange, SkillFileDraftOperation, SkillPlannedChange,
+    SkillValidationIssue,
+};
+
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
@@ -22,8 +32,22 @@ pub enum WorkspaceError {
     Database(#[from] rusqlite::Error),
     #[error("读取视图偏好失败：{0}")]
     Preferences(#[from] serde_json::Error),
+    #[error("生成 SKILL.md 元数据失败：{0}")]
+    DraftMetadata(#[from] serde_yaml::Error),
     #[error("找不到 Skill 实例：{0}")]
     UnknownInstance(String),
+    #[error("无法访问 Skill 文件：{0}")]
+    InvalidSkillPath(String),
+    #[error("Skill 草稿未通过校验：{0}")]
+    InvalidDraft(String),
+    #[error("找不到变化计划：{0}")]
+    UnknownChangePlan(i64),
+    #[error("变化计划已过期：真实文件在预览后发生了变化，请重新预览")]
+    StaleChangePlan,
+    #[error("找不到编辑操作记录：{0}")]
+    UnknownChangeOperation(i64),
+    #[error("该编辑操作已经撤销")]
+    ChangeAlreadyUndone,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +261,22 @@ impl SkillWorkspace {
                 instance_id TEXT PRIMARY KEY,
                 tags TEXT NOT NULL DEFAULT '',
                 skill_groups TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS skill_change_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payload TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS skill_change_operations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                root_id INTEGER NOT NULL,
+                target_directory TEXT NOT NULL,
+                backup_directory TEXT,
+                was_new INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                undone INTEGER NOT NULL DEFAULT 0,
+                completed INTEGER NOT NULL DEFAULT 0
             );
             ",
         )?;
@@ -769,6 +809,19 @@ fn migrate_workspace_index(connection: &Connection) -> Result<(), WorkspaceError
     }
     if !root_columns.iter().any(|column| column == "recovery_hint") {
         connection.execute("ALTER TABLE skill_roots ADD COLUMN recovery_hint TEXT", [])?;
+    }
+
+    let operation_columns = {
+        let mut statement = connection.prepare("PRAGMA table_info(skill_change_operations)")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if !operation_columns.iter().any(|column| column == "completed") {
+        connection.execute(
+            "ALTER TABLE skill_change_operations ADD COLUMN completed INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
     }
 
     let legacy_root = connection

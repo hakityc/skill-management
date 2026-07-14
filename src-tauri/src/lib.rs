@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 
 use skill_workspace::{
-    SkillQuery, SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences, WorkspaceSnapshot,
+    SkillChangeOutcome, SkillChangePlan, SkillDetail, SkillDraft, SkillDraftValidation,
+    SkillFilePreview, SkillQuery, SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences,
+    WorkspaceSnapshot,
 };
 use tauri::Manager;
 
@@ -84,6 +86,70 @@ fn save_view_preferences(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn skill_detail(
+    instance_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillDetail, String> {
+    state
+        .workspace
+        .skill_detail(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_skill_file(
+    instance_id: String,
+    relative_path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillFilePreview, String> {
+    state
+        .workspace
+        .read_skill_file(&instance_id, &relative_path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn validate_skill_draft(
+    draft: SkillDraft,
+    state: tauri::State<'_, AppState>,
+) -> SkillDraftValidation {
+    state.workspace.validate_skill_draft(&draft)
+}
+
+#[tauri::command]
+fn plan_skill_change(
+    draft: SkillDraft,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillChangePlan, String> {
+    state
+        .workspace
+        .plan_skill_change(&draft)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn execute_skill_change(
+    plan_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillChangeOutcome, String> {
+    state
+        .workspace
+        .execute_skill_change(plan_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn undo_skill_change(
+    operation_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillChangeOutcome, String> {
+    state
+        .workspace
+        .undo_skill_change(operation_id)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -103,7 +169,13 @@ pub fn run() {
             remove_skill_root,
             search_skills,
             load_view_preferences,
-            save_view_preferences
+            save_view_preferences,
+            skill_detail,
+            read_skill_file,
+            validate_skill_draft,
+            plan_skill_change,
+            execute_skill_change,
+            undo_skill_change
         ])
         .run(tauri::generate_context!())
         .expect("启动 Skill 管理器失败");
