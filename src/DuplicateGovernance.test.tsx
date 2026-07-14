@@ -27,7 +27,9 @@ describe("重复检查中心", () => {
     suspected.comparisons.push({
       ...suspected.comparisons[0],
       rightInstanceId: "third-suspected",
-      similarity: 0.83,
+      status: "nameConflict",
+      similarity: 0.46,
+      hitRules: ["normalizedName"],
     });
     const exact = duplicateGroup("exact", "api-review", 1);
     const conflict = duplicateGroup("nameConflict", "auth-helper", 0.46);
@@ -81,7 +83,12 @@ describe("重复检查中心", () => {
     expect(screen.getByText("/Users/me/.codex/skills/release-notes")).toBeTruthy();
     expect(screen.getByText("/Users/me/.claude/skills/release-notes")).toBeTruthy();
     expect(screen.getByText("## 修复与升级")).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "比较实例组合" })).toBeTruthy();
+    const comparisonPicker = screen.getByRole("combobox", { name: "比较实例组合" });
+    expect(comparisonPicker).toBeTruthy();
+    await userEvent.selectOptions(comparisonPicker, "1");
+    expect(screen.getByText("重复检查 / 同名冲突")).toBeTruthy();
+    expect(screen.queryByText("内容相似度 ≥ 82%")).toBeNull();
+    await userEvent.selectOptions(comparisonPicker, "0");
     await userEvent.click(screen.getByRole("button", { name: /preview\.png/ }));
     expect(screen.getByText("111")).toBeTruthy();
     expect(screen.getByText("222")).toBeTruthy();
