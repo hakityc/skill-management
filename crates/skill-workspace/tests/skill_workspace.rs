@@ -25,7 +25,7 @@ fn personal_user_can_authorize_a_root_and_see_ready_and_repairable_skill_instanc
     let workspace =
         SkillWorkspace::open(sandbox.path().join("index.sqlite3")).expect("打开 SkillWorkspace");
     let snapshot = workspace
-        .authorize_root(&authorized_root)
+        .add_root(&authorized_root)
         .expect("授权并扫描 Skill 根目录");
 
     assert_eq!(snapshot.instances.len(), 2);
@@ -75,7 +75,7 @@ fn personal_user_recovers_the_authorized_root_and_index_after_reopening() {
     {
         let workspace = SkillWorkspace::open(&database_path).expect("打开 SkillWorkspace");
         workspace
-            .authorize_root(&authorized_root)
+            .add_root(&authorized_root)
             .expect("授权并扫描 Skill 根目录");
     }
 
@@ -115,7 +115,7 @@ fn unreadable_skill_document_is_repairable_without_hiding_healthy_siblings() {
     let workspace =
         SkillWorkspace::open(sandbox.path().join("index.sqlite3")).expect("打开 SkillWorkspace");
     let snapshot = workspace
-        .authorize_root(&authorized_root)
+        .add_root(&authorized_root)
         .expect("单个损坏文档不应中止扫描");
 
     assert_eq!(snapshot.instances.len(), 2);

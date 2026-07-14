@@ -18,5 +18,9 @@ export function createTauriSkillGateway(): SkillGateway {
         path: selected,
       });
     },
+    rescanRoot: (rootId) =>
+      invoke<WorkspaceSnapshot>("rescan_skill_root", { rootId }),
+    removeRoot: (rootId) =>
+      invoke<WorkspaceSnapshot>("remove_skill_root", { rootId }),
   };
 }

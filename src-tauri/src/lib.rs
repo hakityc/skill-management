@@ -24,7 +24,29 @@ fn authorize_skill_root(
 ) -> Result<WorkspaceSnapshot, String> {
     state
         .workspace
-        .authorize_root(PathBuf::from(path))
+        .add_root(PathBuf::from(path))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn rescan_skill_root(
+    root_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceSnapshot, String> {
+    state
+        .workspace
+        .rescan_root(root_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_skill_root(
+    root_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceSnapshot, String> {
+    state
+        .workspace
+        .remove_root(root_id)
         .map_err(|error| error.to_string())
 }
 
@@ -42,7 +64,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             workspace_snapshot,
-            authorize_skill_root
+            authorize_skill_root,
+            rescan_skill_root,
+            remove_skill_root
         ])
         .run(tauri::generate_context!())
         .expect("启动 Skill 管理器失败");

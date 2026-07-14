@@ -65,14 +65,49 @@ button:focus-visible { outline: 3px solid rgb(47 109 226 / 24%); outline-offset:
 .skill-copy strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .skill-copy small { overflow: hidden; color: #6f7a73; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .skill-copy .skill-error { color: #a3443e; }
+.skill-copy .skill-link { color: #695db6; }
 .skill-row code { overflow: hidden; color: #6f7a73; font-family: "SFMono-Regular", monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .status-badge { justify-self: start; padding: 5px 9px; border-radius: 999px; background: #dff3e9; color: #176849; font-size: 9px; font-weight: 800; }
 .status-badge.repair { background: #f9e7e5; color: #a43e38; }
+
+.root-management-page { min-height: calc(100vh - 68px); padding: 30px clamp(22px, 4vw, 52px) 46px; background: #fff; }
+.root-management-title { display: flex; align-items: end; justify-content: space-between; gap: 24px; max-width: 1180px; margin: 0 auto 30px; }
+.root-management-title h1 { margin: 5px 0 6px; font-size: 28px; letter-spacing: -.04em; }
+.root-management-title p:not(.eyebrow) { margin: 0; color: #6f7a73; font-size: 12px; }
+.text-button { margin: 0 0 22px; padding: 0; border: 0; background: transparent; color: #526159; font-size: 11px; font-weight: 750; }
+.preset-section, .managed-roots { max-width: 1180px; margin: 0 auto 28px; }
+.section-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 12px; }
+.section-heading h2 { margin: 0 0 3px; font-size: 14px; }
+.section-heading p { margin: 0; color: #7c8780; font-size: 10px; }
+.preset-grid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 9px; }
+.preset-card { display: grid; gap: 8px; min-width: 0; padding: 13px; border: 1px solid #dce2dc; border-radius: 10px; background: #f8faf7; }
+.preset-card strong { font-size: 11px; }
+.preset-card code { overflow: hidden; color: #6f7a73; font-family: "SFMono-Regular", monospace; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.root-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.managed-root { display: grid; grid-template-columns: 4px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 14px 15px; border: 1px solid #dce2dc; border-radius: 11px; background: #fff; }
+.root-health { width: 4px; height: 44px; border-radius: 6px; background: #36a577; }
+.managed-root.warning .root-health { background: #d49135; }
+.managed-root.danger .root-health { background: #bb4e47; }
+.managed-root-copy { display: grid; min-width: 0; grid-template-columns: minmax(180px, 1fr) auto; align-items: center; gap: 5px 14px; }
+.managed-root-copy code { overflow: hidden; font-family: "SFMono-Regular", monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-root-copy small { grid-column: 1 / -1; color: #77827b; font-size: 9px; }
+.managed-root-copy .root-error { color: #9a443e; }
+.root-status { padding: 5px 8px; border-radius: 999px; background: #dff3e9; color: #176849; font-size: 9px; font-weight: 800; white-space: nowrap; }
+.warning .root-status { background: #fff0d8; color: #8a5a16; }
+.danger .root-status { background: #f9e7e5; color: #a43e38; }
+.root-actions { display: flex; gap: 7px; }
+.secondary-button.compact, .danger-button { min-height: 30px; padding: 0 10px; border-radius: 7px; font-size: 9px; font-weight: 800; }
+.danger-button { border: 1px solid #e7c5c2; background: #fff; color: #9a443e; }
+.danger-button:disabled { cursor: progress; opacity: .6; }
+.safe-removal-note { margin: 12px 2px 0; color: #7c8780; font-size: 9px; }
 
 @media (max-width: 900px) {
   .library-page { grid-template-columns: 156px minmax(0, 1fr); }
   .library-content { padding: 22px 16px; }
   .table-header, .skill-row { grid-template-columns: minmax(180px, 1fr) minmax(100px, .55fr) 86px; }
+  .preset-grid { grid-template-columns: repeat(3, minmax(110px, 1fr)); }
+  .managed-root { grid-template-columns: 4px minmax(0, 1fr); }
+  .root-actions { grid-column: 2; }
 }
 
 @media (prefers-reduced-motion: reduce) {
