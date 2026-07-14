@@ -2,7 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type { SkillGateway } from "./App";
-import type { WorkspaceSnapshot } from "./models";
+import type {
+  SkillQuery,
+  SkillSearchResult,
+  SkillWorkspaceViewPreferences,
+  WorkspaceSnapshot,
+} from "./models";
 
 export function createTauriSkillGateway(): SkillGateway {
   return {
@@ -22,5 +27,11 @@ export function createTauriSkillGateway(): SkillGateway {
       invoke<WorkspaceSnapshot>("rescan_skill_root", { rootId }),
     removeRoot: (rootId) =>
       invoke<WorkspaceSnapshot>("remove_skill_root", { rootId }),
+    searchSkills: (query: SkillQuery) =>
+      invoke<SkillSearchResult>("search_skills", { query }),
+    loadViewPreferences: () =>
+      invoke<SkillWorkspaceViewPreferences>("load_view_preferences"),
+    saveViewPreferences: (preferences: SkillWorkspaceViewPreferences) =>
+      invoke<void>("save_view_preferences", { preferences }),
   };
 }

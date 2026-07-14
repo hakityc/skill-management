@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use skill_workspace::{SkillWorkspace, WorkspaceSnapshot};
+use skill_workspace::{
+    SkillQuery, SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences, WorkspaceSnapshot,
+};
 use tauri::Manager;
 
 struct AppState {
@@ -50,6 +52,38 @@ fn remove_skill_root(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn search_skills(
+    query: SkillQuery,
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillSearchResult, String> {
+    state
+        .workspace
+        .search_skills(&query)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn load_view_preferences(
+    state: tauri::State<'_, AppState>,
+) -> Result<SkillWorkspaceViewPreferences, String> {
+    state
+        .workspace
+        .load_view_preferences()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_view_preferences(
+    preferences: SkillWorkspaceViewPreferences,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .workspace
+        .save_view_preferences(&preferences)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -66,7 +100,10 @@ pub fn run() {
             workspace_snapshot,
             authorize_skill_root,
             rescan_skill_root,
-            remove_skill_root
+            remove_skill_root,
+            search_skills,
+            load_view_preferences,
+            save_view_preferences
         ])
         .run(tauri::generate_context!())
         .expect("启动 Skill 管理器失败");

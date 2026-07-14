@@ -1,11 +1,26 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { SkillManagerApp } from "./App";
-import type { WorkspaceSnapshot } from "./models";
+import type {
+  SkillQuery,
+  SkillWorkspaceViewPreferences,
+  WorkspaceSnapshot,
+} from "./models";
 
 afterEach(cleanup);
+
+const defaultViewPreferences: SkillWorkspaceViewPreferences = {
+  filters: {
+    clients: [],
+    rootIds: [],
+    needsRepair: null,
+    duplicateStatuses: [],
+  },
+  sort: { field: "name", direction: "asc" },
+  density: "compact",
+};
 
 describe("Skill 管理器", () => {
   test("个人用户从中文空状态选择根目录后看到合法与需要修复的 Skill", async () => {
@@ -37,6 +52,10 @@ describe("Skill 管理器", () => {
           realPath: "/Users/shared-skills/api-review",
           status: "ready",
           error: null,
+          client: "codex",
+          duplicateStatus: "none",
+          createdAt: 1,
+          modifiedAt: 1,
         },
         {
           id: "broken-skill",
@@ -49,6 +68,10 @@ describe("Skill 管理器", () => {
           realPath: "/Users/example/.codex/skills/broken-skill",
           status: "needsRepair",
           error: "YAML frontmatter 缺少 description",
+          client: "codex",
+          duplicateStatus: "none",
+          createdAt: 1,
+          modifiedAt: 1,
         },
       ],
     };
@@ -57,6 +80,12 @@ describe("Skill 管理器", () => {
       chooseAndAuthorizeRoot: async () => scannedSnapshot,
       rescanRoot: async () => scannedSnapshot,
       removeRoot: async () => emptySnapshot,
+      searchSkills: async () => ({
+        instances: scannedSnapshot.instances,
+        total: scannedSnapshot.instances.length,
+      }),
+      loadViewPreferences: async () => defaultViewPreferences,
+      saveViewPreferences: async () => {},
     };
 
     render(<SkillManagerApp gateway={gateway} />);
@@ -134,6 +163,9 @@ describe("Skill 管理器", () => {
           roots: initial.roots.filter((root) => root.id !== rootId),
         };
       },
+      searchSkills: async () => ({ instances: [], total: 0 }),
+      loadViewPreferences: async () => defaultViewPreferences,
+      saveViewPreferences: async () => {},
     };
 
     render(<SkillManagerApp gateway={gateway} />);
@@ -160,5 +192,103 @@ describe("Skill 管理器", () => {
     );
     expect(removed).toBe(true);
     expect(screen.queryByText("/Users/example/.claude/skills")).toBeNull();
+  });
+
+  test("个人用户在中文工作台检索并组合筛选排序后可一键清空", async () => {
+    const snapshot: WorkspaceSnapshot = {
+      authorizedRoot: "/Users/example/.codex/skills",
+      roots: [
+        {
+          id: 1,
+          path: "/Users/example/.codex/skills",
+          status: "ready",
+          error: null,
+          recoveryHint: null,
+        },
+      ],
+      instances: [
+        {
+          id: "api-review",
+          rootId: 1,
+          name: "api-review",
+          description: "审查接口边界。",
+          relativePath: "api-review",
+          skillFilePath: "/Users/example/.codex/skills/api-review/SKILL.md",
+          linkPath: null,
+          realPath: "/Users/example/.codex/skills/api-review",
+          status: "needsRepair",
+          error: "缺少字段",
+          client: "codex",
+          duplicateStatus: "none",
+          createdAt: 1,
+          modifiedAt: 2,
+        },
+      ],
+    };
+    const queries: SkillQuery[] = [];
+    const savedPreferences: SkillWorkspaceViewPreferences[] = [];
+    const gateway = {
+      loadSnapshot: async () => snapshot,
+      chooseAndAuthorizeRoot: async () => null,
+      rescanRoot: async () => snapshot,
+      removeRoot: async () => snapshot,
+      loadViewPreferences: async () => defaultViewPreferences,
+      async saveViewPreferences(preferences: SkillWorkspaceViewPreferences) {
+        savedPreferences.push(preferences);
+      },
+      async searchSkills(query: SkillQuery) {
+        queries.push(query);
+        return { instances: snapshot.instances, total: snapshot.instances.length };
+      },
+    };
+
+    render(<SkillManagerApp gateway={gateway} />);
+
+    const search = await screen.findByRole("searchbox", { name: "搜索 Skill" });
+    await userEvent.type(search, "replay");
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "客户端筛选" }),
+      "codex",
+    );
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "根目录筛选" }),
+      "1",
+    );
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "状态筛选" }),
+      "needsRepair",
+    );
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "重复状态筛选" }),
+      "none",
+    );
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "排序方式" }),
+      "modifiedAt:desc",
+    );
+
+    await waitFor(() => {
+      const lastQuery = queries.at(-1);
+      expect(lastQuery?.text).toBe("replay");
+      expect(lastQuery?.filters.clients).toEqual(["codex"]);
+      expect(lastQuery?.filters.rootIds).toEqual([1]);
+      expect(lastQuery?.filters.needsRepair).toBe(true);
+      expect(lastQuery?.filters.duplicateStatuses).toEqual(["none"]);
+      expect(lastQuery?.sort).toEqual({ field: "modifiedAt", direction: "desc" });
+    });
+    expect(screen.getByText("检索“replay” · 1 个结果")).toBeTruthy();
+    expect(savedPreferences.at(-1)?.sort.field).toBe("modifiedAt");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "清空检索与筛选" }),
+    );
+    await waitFor(() => {
+      const lastQuery = queries.at(-1);
+      expect(lastQuery?.text).toBe("");
+      expect(lastQuery?.filters.clients).toEqual([]);
+      expect(lastQuery?.filters.rootIds).toEqual([]);
+      expect(lastQuery?.filters.needsRepair).toBeNull();
+      expect(lastQuery?.filters.duplicateStatuses).toEqual([]);
+    });
   });
 });

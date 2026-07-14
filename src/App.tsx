@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 
-import type { SkillInstance, SkillRoot, WorkspaceSnapshot } from "./models";
+import type {
+  DuplicateStatus,
+  SkillClient,
+  SkillFilters,
+  SkillInstance,
+  SkillQuery,
+  SkillRoot,
+  SkillSearchResult,
+  SkillSort,
+  SkillWorkspaceViewPreferences,
+  WorkspaceSnapshot,
+} from "./models";
 import "./styles.css";
 
 export interface SkillGateway {
@@ -8,6 +19,9 @@ export interface SkillGateway {
   chooseAndAuthorizeRoot(): Promise<WorkspaceSnapshot | null>;
   rescanRoot(rootId: number): Promise<WorkspaceSnapshot>;
   removeRoot(rootId: number): Promise<WorkspaceSnapshot>;
+  searchSkills(query: SkillQuery): Promise<SkillSearchResult>;
+  loadViewPreferences(): Promise<SkillWorkspaceViewPreferences>;
+  saveViewPreferences(preferences: SkillWorkspaceViewPreferences): Promise<void>;
 }
 
 interface SkillManagerAppProps {
@@ -98,7 +112,11 @@ export function SkillManagerApp({ gateway }: SkillManagerAppProps) {
             onRemove={(rootId) => updateRoot(rootId, "remove")}
           />
         ) : (
-          <SkillLibrary snapshot={snapshot} onManageRoots={() => setView("roots")} />
+          <SkillLibrary
+            gateway={gateway}
+            snapshot={snapshot}
+            onManageRoots={() => setView("roots")}
+          />
         )
       ) : (
         <EmptyState onChooseRoot={chooseRoot} disabled={selecting} />
@@ -163,26 +181,141 @@ function EmptyState({
   );
 }
 
+const EMPTY_FILTERS: SkillFilters = {
+  clients: [],
+  rootIds: [],
+  needsRepair: null,
+  duplicateStatuses: [],
+};
+
+const DEFAULT_VIEW_PREFERENCES: SkillWorkspaceViewPreferences = {
+  filters: EMPTY_FILTERS,
+  sort: { field: "name", direction: "asc" },
+  density: "compact",
+};
+
 function SkillLibrary({
+  gateway,
   snapshot,
   onManageRoots,
 }: {
+  gateway: SkillGateway;
   snapshot: WorkspaceSnapshot;
   onManageRoots(): void;
 }) {
+  const [queryText, setQueryText] = useState("");
+  const [preferences, setPreferences] = useState(DEFAULT_VIEW_PREFERENCES);
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const [instances, setInstances] = useState(snapshot.instances);
+  const [total, setTotal] = useState(snapshot.instances.length);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const repairCount = snapshot.instances.filter(
     (skill) => skill.status === "needsRepair",
   ).length;
   const rootsById = new Map(snapshot.roots.map((root) => [root.id, root]));
+
+  useEffect(() => {
+    let active = true;
+    gateway
+      .loadViewPreferences()
+      .then((saved) => {
+        if (active) setPreferences(saved);
+      })
+      .catch((reason: unknown) => {
+        if (active) setSearchError(readableError(reason));
+      })
+      .finally(() => {
+        if (active) setPreferencesReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [gateway]);
+
+  useEffect(() => {
+    if (!preferencesReady) return;
+    void gateway.saveViewPreferences(preferences).catch((reason: unknown) => {
+      setSearchError(readableError(reason));
+    });
+  }, [gateway, preferences, preferencesReady]);
+
+  useEffect(() => {
+    if (!preferencesReady) return;
+    let active = true;
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      gateway
+        .searchSkills({
+          text: queryText,
+          filters: preferences.filters,
+          sort: preferences.sort,
+        })
+        .then((result) => {
+          if (!active) return;
+          setInstances(result.instances);
+          setTotal(result.total);
+          setSearchError(null);
+        })
+        .catch((reason: unknown) => {
+          if (active) setSearchError(readableError(reason));
+        })
+        .finally(() => {
+          if (active) setSearching(false);
+        });
+    }, 120);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [gateway, preferences.filters, preferences.sort, preferencesReady, queryText, snapshot]);
+
+  function updateFilters(filters: SkillFilters) {
+    setPreferences((current) => ({ ...current, filters }));
+  }
+
+  function updateSingleFilter<Key extends keyof SkillFilters>(
+    key: Key,
+    value: SkillFilters[Key],
+  ) {
+    updateFilters({ ...preferences.filters, [key]: value });
+  }
+
+  function updateSort(value: string) {
+    const [field, direction] = value.split(":") as [
+      SkillSort["field"],
+      SkillSort["direction"],
+    ];
+    setPreferences((current) => ({ ...current, sort: { field, direction } }));
+  }
+
+  const hasConditions =
+    queryText.length > 0 ||
+    preferences.filters.clients.length > 0 ||
+    preferences.filters.rootIds.length > 0 ||
+    preferences.filters.needsRepair !== null ||
+    preferences.filters.duplicateStatuses.length > 0;
+  const resultStatus = searching
+    ? "正在检索…"
+    : queryText
+      ? `检索“${queryText}” · ${total} 个结果`
+      : `${total} 个实例`;
+
   return (
     <main className="library-page">
       <aside className="library-sidebar">
         <p className="eyebrow">资料库</p>
-        <button className="nav-item active">
+        <button
+          className={preferences.filters.needsRepair === null ? "nav-item active" : "nav-item"}
+          onClick={() => updateSingleFilter("needsRepair", null)}
+        >
           <span>全部 Skill</span>
           <b>{snapshot.instances.length}</b>
         </button>
-        <button className="nav-item">
+        <button
+          className={preferences.filters.needsRepair === true ? "nav-item active" : "nav-item"}
+          onClick={() => updateSingleFilter("needsRepair", true)}
+        >
           <span>需要修复</span>
           <b>{repairCount}</b>
         </button>
@@ -202,25 +335,179 @@ function SkillLibrary({
             <p className="eyebrow">本地资料库</p>
             <h1>全部 Skill</h1>
           </div>
-          <span className="scan-status">
-            <i /> 已完成扫描
+          <span className="scan-status" aria-live="polite">
+            <i /> {resultStatus}
           </span>
         </div>
-        <div className="table-shell">
+        <div className="workspace-toolbar">
+          <label className={queryText ? "search-control active" : "search-control"}>
+            <span aria-hidden="true">⌕</span>
+            <input
+              type="search"
+              aria-label="搜索 Skill"
+              placeholder="搜索名称、描述、正文或路径"
+              value={queryText}
+              onChange={(event) => setQueryText(event.target.value)}
+            />
+          </label>
+          <FilterSelect
+            label="客户端筛选"
+            value={preferences.filters.clients[0] ?? ""}
+            onChange={(value) =>
+              updateSingleFilter("clients", value ? [value as SkillClient] : [])
+            }
+            options={[
+              ["", "全部客户端"],
+              ["claude", "Claude"],
+              ["codex", "Codex"],
+              ["gemini", "Gemini"],
+              ["openCode", "OpenCode"],
+              ["hermes", "Hermes"],
+              ["other", "自定义"],
+            ]}
+          />
+          <FilterSelect
+            label="根目录筛选"
+            value={preferences.filters.rootIds[0]?.toString() ?? ""}
+            onChange={(value) => updateSingleFilter("rootIds", value ? [Number(value)] : [])}
+            options={[
+              ["", "全部根目录"],
+              ...snapshot.roots.map((root) => [root.id.toString(), shortRoot(root.path)]),
+            ]}
+          />
+          <FilterSelect
+            label="状态筛选"
+            value={
+              preferences.filters.needsRepair === null
+                ? ""
+                : preferences.filters.needsRepair
+                  ? "needsRepair"
+                  : "ready"
+            }
+            onChange={(value) =>
+              updateSingleFilter(
+                "needsRepair",
+                value === "" ? null : value === "needsRepair",
+              )
+            }
+            options={[
+              ["", "全部状态"],
+              ["ready", "正常"],
+              ["needsRepair", "需要修复"],
+            ]}
+          />
+          <FilterSelect
+            label="重复状态筛选"
+            value={preferences.filters.duplicateStatuses[0] ?? ""}
+            onChange={(value) =>
+              updateSingleFilter(
+                "duplicateStatuses",
+                value ? [value as DuplicateStatus] : [],
+              )
+            }
+            options={[
+              ["", "全部重复状态"],
+              ["none", "无重复"],
+              ["exact", "完全重复"],
+              ["suspected", "疑似重复"],
+              ["nameConflict", "同名冲突"],
+            ]}
+          />
+          <FilterSelect
+            label="排序方式"
+            value={`${preferences.sort.field}:${preferences.sort.direction}`}
+            onChange={updateSort}
+            options={[
+              ["name:asc", "名称 A–Z"],
+              ["name:desc", "名称 Z–A"],
+              ["modifiedAt:desc", "最近修改"],
+              ["createdAt:desc", "最近创建"],
+              ["root:asc", "根目录"],
+              ["duplicateStatus:asc", "重复状态"],
+            ]}
+          />
+          <button
+            className="density-button"
+            aria-label="切换列表密度"
+            onClick={() =>
+              setPreferences((current) => ({
+                ...current,
+                density: current.density === "compact" ? "comfortable" : "compact",
+              }))
+            }
+          >
+            {preferences.density === "compact" ? "紧凑" : "舒适"}
+          </button>
+          {hasConditions ? (
+            <button
+              className="clear-filters"
+              aria-label="清空检索与筛选"
+              onClick={() => {
+                setQueryText("");
+                updateFilters(EMPTY_FILTERS);
+              }}
+            >
+              清空
+            </button>
+          ) : null}
+        </div>
+        {searchError ? <p className="search-error">检索失败：{searchError}</p> : null}
+        <div className={`table-shell ${preferences.density}`}>
           <div className="table-header" aria-hidden="true">
             <span>Skill</span>
             <span>相对路径</span>
             <span>状态</span>
           </div>
-          <ul className="skill-list" aria-label="本地 Skill">
-            {snapshot.instances.map((skill) => (
-              <SkillRow key={skill.id} skill={skill} root={rootsById.get(skill.rootId)} />
-            ))}
-          </ul>
+          {instances.length ? (
+            <ul className="skill-list" aria-label="本地 Skill">
+              {instances.map((skill) => (
+                <SkillRow key={skill.id} skill={skill} root={rootsById.get(skill.rootId)} />
+              ))}
+            </ul>
+          ) : (
+            <div className="no-results">
+              <strong>没有匹配的 Skill</strong>
+              <span>尝试清空检索词或调整筛选条件。</span>
+            </div>
+          )}
         </div>
       </section>
     </main>
   );
+}
+
+function FilterSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[][];
+  onChange(value: string): void;
+}) {
+  return (
+    <label className="filter-control">
+      <span>{label.replace("筛选", "")}</span>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map(([optionValue, optionLabel]) => (
+          <option key={optionValue} value={optionValue}>
+            {optionLabel}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function shortRoot(path: string) {
+  const parts = path.split("/").filter(Boolean);
+  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : path;
 }
 
 const PRESET_ROOTS = [
