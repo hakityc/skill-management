@@ -1,5 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Profiler } from "react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { SkillManagerApp, type SkillGateway } from "./App";
@@ -91,6 +92,113 @@ const unavailableEditingMethods: Pick<
 };
 
 describe("Skill 管理器", () => {
+  test("千实例列表可在基线内完成检索、选择与键盘聚焦", async () => {
+    const instances = Array.from({ length: 1_000 }, (_, index) =>
+      testInstance(
+        `skill-${String(index).padStart(4, "0")}`,
+        `skill-${String(index).padStart(4, "0")}`,
+        1,
+        "codex",
+        "none",
+      ),
+    );
+    const snapshot: WorkspaceSnapshot = {
+      authorizedRoot: "/Users/me/.codex/skills",
+      roots: [
+        {
+          id: 1,
+          path: "/Users/me/.codex/skills",
+          status: "ready",
+          error: null,
+          recoveryHint: null,
+        },
+      ],
+      instances,
+    };
+    const gateway: SkillGateway = {
+      ...unavailableEditingMethods,
+      loadSnapshot: async () => snapshot,
+      chooseAndAuthorizeRoot: async () => null,
+      rescanRoot: async () => snapshot,
+      removeRoot: async () => snapshot,
+      searchSkills: async (query) => {
+        let matches = query.text
+          ? instances.filter((instance) => instance.name.includes(query.text))
+          : instances;
+        if (query.filters.clients.length > 0) {
+          matches = matches.filter((instance) =>
+            query.filters.clients.includes(instance.client),
+          );
+        }
+        if (query.filters.repairStatus !== "any") {
+          matches = query.filters.repairStatus === "ready" ? matches : [];
+        }
+        if (query.filters.duplicateCheckStatuses.length > 0) {
+          matches = matches.filter((instance) =>
+            query.filters.duplicateCheckStatuses.includes(instance.duplicateCheckStatus),
+          );
+        }
+        matches = [...matches].sort((left, right) =>
+          query.sort.direction === "asc"
+            ? left.name.localeCompare(right.name)
+            : right.name.localeCompare(left.name),
+        );
+        return { instances: matches, total: matches.length };
+      },
+      loadViewPreferences: async () => defaultViewPreferences,
+      saveViewPreferences: async () => {},
+    };
+
+    const started = performance.now();
+    let longestReactCommit = 0;
+    render(
+      <Profiler
+        id="千实例工作台"
+        onRender={(_, __, actualDuration) => {
+          longestReactCommit = Math.max(longestReactCommit, actualDuration);
+        }}
+      >
+        <SkillManagerApp gateway={gateway} />
+      </Profiler>,
+    );
+    const firstCheckbox = await screen.findByRole("checkbox", {
+      name: "选择 skill-0000",
+    });
+    await userEvent.click(firstCheckbox);
+    expect(await screen.findByText("已选择 1 个 Skill 实例")).toBeTruthy();
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Skill 客户端筛选" }),
+      "codex",
+    );
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "状态筛选" }),
+      "ready",
+    );
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "重复检查状态筛选" }),
+      "none",
+    );
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "排序方式" }),
+      "name:desc",
+    );
+
+    const search = screen.getByRole("searchbox", { name: "搜索 Skill" });
+    search.focus();
+    expect(document.activeElement).toBe(search);
+    await userEvent.clear(search);
+    await userEvent.type(search, "0999");
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("list", { name: "本地 Skill" })).getAllByRole("listitem"),
+      ).toHaveLength(1);
+    });
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(5_000);
+    expect(longestReactCommit).toBeLessThan(1_000);
+  });
+
   test("个人用户从中文空状态选择根目录后看到合法与需要修复的 Skill", async () => {
     const emptySnapshot: WorkspaceSnapshot = {
       authorizedRoot: null,
@@ -604,7 +712,7 @@ describe("Skill 管理器", () => {
     expect(screen.getByRole("button", { name: /正常.*2/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /需要修复.*1/ })).toBeTruthy();
 
-    await userEvent.click(screen.getByRole("button", { name: /发布流程.*2/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /发布流程.*2/ }));
     expect(await screen.findByRole("heading", { name: "发布流程" })).toBeTruthy();
     await waitFor(() => {
       const rows = within(screen.getByRole("list", { name: "本地 Skill" })).getAllByRole("listitem");

@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
     path::Path,
@@ -149,7 +150,9 @@ struct EffectiveFile {
 struct InstanceContent {
     instance: SkillInstance,
     files: BTreeMap<String, EffectiveFile>,
+    normalized_name: String,
     similarity_bigrams: HashMap<(char, char), usize>,
+    similarity_bigrams_by_frequency: Vec<((char, char), usize)>,
     similarity_bigram_count: usize,
 }
 
@@ -179,6 +182,14 @@ impl SkillWorkspace {
         let mut candidates = Vec::new();
         for left in 0..contents.len() {
             for right in (left + 1)..contents.len() {
+                let exact = contents[left].files == contents[right].files;
+                let same_name = contents[left].normalized_name == contents[right].normalized_name;
+                if !exact
+                    && !same_name
+                    && !dice_bigram_reaches_threshold(&contents[left], &contents[right])
+                {
+                    continue;
+                }
                 let classification = classify_pair(&contents[left], &contents[right]);
                 if classification.status != DuplicateCheckStatus::None
                     && !suppressed_pairs.contains(&pair_key(
@@ -350,10 +361,17 @@ fn read_instance_content(instance: &SkillInstance) -> Result<InstanceContent, Wo
     collect_files(base, base, &mut files, false)?;
     let similarity_bigrams = bigram_counts(&similarity_document(&files));
     let similarity_bigram_count = similarity_bigrams.values().sum();
+    let mut similarity_bigrams_by_frequency = similarity_bigrams
+        .iter()
+        .map(|(bigram, count)| (*bigram, *count))
+        .collect::<Vec<_>>();
+    similarity_bigrams_by_frequency.sort_by_key(|entry| Reverse(entry.1));
     Ok(InstanceContent {
         instance: instance.clone(),
         files,
+        normalized_name: normalized_name(&instance.name),
         similarity_bigrams,
+        similarity_bigrams_by_frequency,
         similarity_bigram_count,
     })
 }
@@ -453,7 +471,7 @@ fn classify_pair(left: &InstanceContent, right: &InstanceContent) -> PairClassif
             right.similarity_bigram_count,
         )
     };
-    let same_name = normalized_name(&left.instance.name) == normalized_name(&right.instance.name);
+    let same_name = left.normalized_name == right.normalized_name;
     let status = if exact {
         DuplicateCheckStatus::Exact
     } else if same_name && raw_similarity < DUPLICATE_SIMILARITY_THRESHOLD {
@@ -529,6 +547,37 @@ fn dice_bigram_similarity(
         .map(|(bigram, count)| count.min(right.get(bigram).unwrap_or(&0)))
         .sum::<usize>();
     (2 * intersection) as f64 / (left_count + right_count) as f64
+}
+
+fn dice_bigram_reaches_threshold(left: &InstanceContent, right: &InstanceContent) -> bool {
+    let total = left.similarity_bigram_count + right.similarity_bigram_count;
+    if total == 0 {
+        return false;
+    }
+    let (entries, counterpart_bigrams, mut remaining) =
+        if left.similarity_bigram_count <= right.similarity_bigram_count {
+            (
+                &left.similarity_bigrams_by_frequency,
+                &right.similarity_bigrams,
+                left.similarity_bigram_count,
+            )
+        } else {
+            (
+                &right.similarity_bigrams_by_frequency,
+                &left.similarity_bigrams,
+                right.similarity_bigram_count,
+            )
+        };
+    let mut intersection = 0usize;
+    for (bigram, count) in entries {
+        remaining -= count;
+        intersection += count.min(counterpart_bigrams.get(bigram).unwrap_or(&0));
+        let maximum_similarity = (2 * (intersection + remaining)) as f64 / total as f64;
+        if maximum_similarity < DUPLICATE_SIMILARITY_THRESHOLD {
+            return false;
+        }
+    }
+    (2 * intersection) as f64 / total as f64 >= DUPLICATE_SIMILARITY_THRESHOLD
 }
 
 fn bigram_counts(value: &str) -> HashMap<(char, char), usize> {

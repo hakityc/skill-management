@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { SkillGateway } from "./App";
+import { readableError } from "./errors";
 import type {
   FileConflictPolicy,
   FileOperationItemResult,
@@ -513,8 +514,4 @@ function formatTimestamp(timestamp: number) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(timestamp));
-}
-
-function readableError(reason: unknown) {
-  return reason instanceof Error ? reason.message : String(reason);
 }

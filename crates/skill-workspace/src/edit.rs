@@ -24,7 +24,11 @@ pub struct SkillDraft {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum SkillDraftTarget {
     Existing { instance_id: String },
     New { root_id: i64, relative_path: String },
@@ -348,10 +352,10 @@ impl SkillWorkspace {
                 "DELETE FROM skill_change_operations WHERE id = ?1 AND completed = 0",
                 [operation_id],
             );
-            if let Err(rollback_error) = rollback {
-                return Err(WorkspaceError::InvalidDraft(format!(
-                    "保存记录失败，且自动恢复失败：{error}；{rollback_error}"
-                )));
+            if rollback.is_err() {
+                return Err(WorkspaceError::InvalidDraft(
+                    "保存记录失败，自动恢复也未完成；请重新扫描根目录并核对真实文件。".to_owned(),
+                ));
             }
             return Err(error);
         }

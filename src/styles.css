@@ -11,7 +11,6 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 760px; min-height: 100vh; background: #f4f6f2; }
 button { font: inherit; }
-button:focus-visible { outline: 3px solid rgb(47 109 226 / 24%); outline-offset: 2px; }
 
 .app-shell { min-height: 100vh; }
 .app-header { display: flex; align-items: center; justify-content: space-between; height: 68px; padding: 0 22px; border-bottom: 1px solid #dce2dc; background: rgb(255 255 255 / 94%); }
@@ -201,4 +200,24 @@ button:focus-visible { outline: 3px solid rgb(47 109 226 / 24%); outline-offset:
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid rgb(47 109 226 / 38%);
+  outline-offset: 2px;
+}
+
+.skill-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 58px;
+}
+
+.replace-binary-button:has(input:focus-visible) {
+  border-radius: 5px;
+  outline: 3px solid rgb(47 109 226 / 38%);
+  outline-offset: 2px;
 }

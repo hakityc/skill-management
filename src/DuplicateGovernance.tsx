@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SkillGateway } from "./App";
+import { readableError } from "./errors";
 import type {
   DuplicateCheckStatus,
   DuplicateComparison,
@@ -762,8 +763,4 @@ function formatPercent(value: number) {
 function formatBytes(value: number | null) {
   if (value === null) return "—";
   return value < 1024 ? `${value} B` : `${(value / 1024).toFixed(1)} KB`;
-}
-
-function readableError(reason: unknown) {
-  return reason instanceof Error ? reason.message : String(reason);
 }

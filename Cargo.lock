@@ -2839,6 +2839,7 @@ name = "skill-management-desktop"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "skill-workspace",
  "tauri",
  "tauri-build",

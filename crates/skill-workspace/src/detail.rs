@@ -39,7 +39,11 @@ pub enum SkillFileKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum SkillFilePreview {
     Text {
         content: String,
@@ -92,10 +96,9 @@ impl SkillWorkspace {
         let detail = self.skill_detail(instance_id)?;
         let base = PathBuf::from(&detail.instance.real_path).canonicalize()?;
         let requested = safe_relative_path(relative_path)?;
-        let target = base
-            .join(requested)
-            .canonicalize()
-            .map_err(|error| WorkspaceError::InvalidSkillPath(format!("文件不可访问：{error}")))?;
+        let target = base.join(requested).canonicalize().map_err(|_| {
+            WorkspaceError::InvalidSkillPath("文件不可访问，请检查路径或权限。".to_owned())
+        })?;
         if !target.starts_with(&base) {
             return Err(WorkspaceError::InvalidSkillPath(
                 "路径指向 Skill 目录之外".to_owned(),

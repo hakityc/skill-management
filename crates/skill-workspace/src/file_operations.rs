@@ -549,7 +549,7 @@ impl SkillWorkspace {
                     Err(error) => result_for(
                         item,
                         FileOperationResultStatus::Failed,
-                        &error.to_string(),
+                        &error.user_message(),
                         false,
                     ),
                 }
@@ -856,8 +856,10 @@ impl SkillWorkspace {
             fs::rename(source, target)?;
             return Ok(());
         }
-        trash::delete(source).map_err(|error| {
-            WorkspaceError::InvalidFileOperation(format!("无法移入系统废纸篓：{error}"))
+        trash::delete(source).map_err(|_| {
+            WorkspaceError::InvalidFileOperation(
+                "无法移入系统废纸篓，请检查文件权限或磁盘状态。".to_owned(),
+            )
         })
     }
 
@@ -1587,10 +1589,11 @@ fn database_parent(database_path: &Path) -> PathBuf {
 }
 
 fn extract_zip_safely(archive_path: &Path, destination: &Path) -> Result<PathBuf, WorkspaceError> {
-    let file = fs::File::open(archive_path)
-        .map_err(|error| WorkspaceError::InvalidArchive(format!("无法打开 ZIP：{error}")))?;
+    let file = fs::File::open(archive_path).map_err(|_| {
+        WorkspaceError::InvalidArchive("无法打开 ZIP，请检查路径或文件权限。".to_owned())
+    })?;
     let mut archive = ZipArchive::new(file)
-        .map_err(|error| WorkspaceError::InvalidArchive(format!("ZIP 格式无效：{error}")))?;
+        .map_err(|_| WorkspaceError::InvalidArchive("ZIP 格式无效或文件已经损坏。".to_owned()))?;
     if archive.len() > MAX_ZIP_ENTRIES {
         return Err(WorkspaceError::InvalidArchive(
             "ZIP 文件条目过多。".to_owned(),
@@ -1600,9 +1603,9 @@ fn extract_zip_safely(archive_path: &Path, destination: &Path) -> Result<PathBuf
     let mut total_size = 0u64;
     let mut seen = HashSet::new();
     for index in 0..archive.len() {
-        let file = archive
-            .by_index(index)
-            .map_err(|error| WorkspaceError::InvalidArchive(error.to_string()))?;
+        let file = archive.by_index(index).map_err(|_| {
+            WorkspaceError::InvalidArchive("无法读取 ZIP 条目，文件可能已经损坏。".to_owned())
+        })?;
         let relative_path = safe_zip_entry_path(file.name())?;
         let key = relative_path.to_string_lossy().to_lowercase();
         if !seen.insert(key) {
@@ -1651,9 +1654,9 @@ fn extract_zip_safely(archive_path: &Path, destination: &Path) -> Result<PathBuf
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut entry = archive
-            .by_index(*index)
-            .map_err(|error| WorkspaceError::InvalidArchive(error.to_string()))?;
+        let mut entry = archive.by_index(*index).map_err(|_| {
+            WorkspaceError::InvalidArchive("无法读取 ZIP 条目，文件可能已经损坏。".to_owned())
+        })?;
         let mut output = fs::File::create(&target)?;
         std::io::copy(&mut entry, &mut output)?;
     }
@@ -1661,9 +1664,9 @@ fn extract_zip_safely(archive_path: &Path, destination: &Path) -> Result<PathBuf
         if !*is_symlink {
             continue;
         }
-        let mut entry = archive
-            .by_index(*index)
-            .map_err(|error| WorkspaceError::InvalidArchive(error.to_string()))?;
+        let mut entry = archive.by_index(*index).map_err(|_| {
+            WorkspaceError::InvalidArchive("无法读取 ZIP 符号链接条目。".to_owned())
+        })?;
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
         let link = String::from_utf8(bytes).map_err(|_| {

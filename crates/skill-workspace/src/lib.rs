@@ -44,13 +44,13 @@ use thiserror::Error;
 pub enum WorkspaceError {
     #[error("无法访问 Skill 根目录：{0}")]
     InvalidRoot(String),
-    #[error("读取本地文件失败：{0}")]
+    #[error("读取本地文件失败，请检查路径、权限或磁盘状态。")]
     Io(#[from] std::io::Error),
-    #[error("初始化本地索引失败：{0}")]
+    #[error("初始化本地索引失败，请检查应用数据目录和磁盘状态。")]
     Database(#[from] rusqlite::Error),
-    #[error("读取视图偏好失败：{0}")]
+    #[error("读取视图偏好失败，请重置视图后重试。")]
     Preferences(#[from] serde_json::Error),
-    #[error("生成 SKILL.md 元数据失败：{0}")]
+    #[error("生成 SKILL.md 元数据失败，请检查名称和描述格式。")]
     DraftMetadata(#[from] serde_yaml::Error),
     #[error("找不到 Skill 实例：{0}")]
     UnknownInstance(String),
@@ -82,6 +82,19 @@ pub enum WorkspaceError {
     StaleFileOperationPlan(String),
     #[error("该文件操作已经撤销")]
     FileOperationAlreadyUndone,
+}
+
+impl WorkspaceError {
+    /// 返回适合直接展示给个人用户的中文错误，不泄露平台或依赖库的英文诊断。
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::Io(_) => "读取本地文件失败，请检查路径、权限或磁盘状态。".to_owned(),
+            Self::Database(_) => "初始化本地索引失败，请检查应用数据目录和磁盘状态。".to_owned(),
+            Self::Preferences(_) => "读取视图偏好失败，请重置视图后重试。".to_owned(),
+            Self::DraftMetadata(_) => "生成 SKILL.md 元数据失败，请检查名称和描述格式。".to_owned(),
+            _ => self.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1133,10 +1146,13 @@ fn scan_root(root_id: i64, root: &Path) -> ScanOutcome {
                 "在系统设置中恢复文件访问权限后重新扫描。",
             );
         }
-        Err(error) => {
+        Err(_) => {
             return unavailable_root(
                 SkillRootStatus::PartialFailure,
-                format!("无法访问 Skill 根目录 {}：{error}", root.display()),
+                format!(
+                    "无法访问 Skill 根目录 {}，请检查磁盘或目录状态。",
+                    root.display()
+                ),
                 "检查磁盘和目录状态后重新扫描。",
             );
         }
@@ -1198,8 +1214,11 @@ fn discover_directory(
 ) {
     let real_directory = match directory.canonicalize() {
         Ok(path) => path,
-        Err(error) => {
-            warnings.push(format!("无法访问目录 {}：{error}", directory.display()));
+        Err(_) => {
+            warnings.push(format!(
+                "无法访问目录 {}，请检查路径或权限。",
+                directory.display()
+            ));
             return;
         }
     };
@@ -1219,8 +1238,11 @@ fn discover_directory(
 
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
-        Err(error) => {
-            warnings.push(format!("无法读取目录 {}：{error}", directory.display()));
+        Err(_) => {
+            warnings.push(format!(
+                "无法读取目录 {}，请检查访问权限。",
+                directory.display()
+            ));
             ancestors.remove(&real_directory);
             return;
         }
@@ -1228,15 +1250,18 @@ fn discover_directory(
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(error) => {
-                warnings.push(format!("读取目录项失败：{error}"));
+            Err(_) => {
+                warnings.push("读取目录项失败，请重新扫描。".to_owned());
                 continue;
             }
         };
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
-            Err(error) => {
-                warnings.push(format!("无法读取 {}：{error}", entry.path().display()));
+            Err(_) => {
+                warnings.push(format!(
+                    "无法读取 {}，请检查访问权限。",
+                    entry.path().display()
+                ));
                 continue;
             }
         };
@@ -1248,13 +1273,14 @@ fn discover_directory(
                     discover_directory(root_id, root, &entry.path(), instances, ancestors, warnings)
                 }
                 Ok(_) => {}
-                Err(error) if file_type.is_symlink() => warnings.push(format!(
-                    "符号链接 {} 的目标不可访问：{error}",
+                Err(_) if file_type.is_symlink() => warnings.push(format!(
+                    "符号链接 {} 的目标不可访问，请检查链接目标。",
                     entry.path().display()
                 )),
-                Err(error) => {
-                    warnings.push(format!("目录 {} 不可访问：{error}", entry.path().display()))
-                }
+                Err(_) => warnings.push(format!(
+                    "目录 {} 不可访问，请检查路径或权限。",
+                    entry.path().display()
+                )),
             }
         }
     }
@@ -1318,9 +1344,9 @@ fn read_skill_instance(
                 String::new(),
             ),
         },
-        Err(error) => (
+        Err(_) => (
             ParsedSkillDocument {
-                error: Some(format!("无法读取 SKILL.md：{error}")),
+                error: Some("无法读取 SKILL.md，请检查文件权限。".to_owned()),
                 ..ParsedSkillDocument::default()
             },
             String::new(),
@@ -1419,9 +1445,9 @@ fn parse_skill_document(content: &str) -> ParsedSkillDocument {
 
     let metadata = match serde_yaml::from_str::<SkillMetadata>(frontmatter) {
         Ok(metadata) => metadata,
-        Err(error) => {
+        Err(_) => {
             return ParsedSkillDocument {
-                error: Some(format!("YAML frontmatter 无法解析：{error}")),
+                error: Some("YAML frontmatter 无法解析，请检查字段、缩进和分隔线。".to_owned()),
                 ..ParsedSkillDocument::default()
             };
         }

@@ -1,4 +1,7 @@
-use std::fs;
+use std::{
+    fs,
+    time::{Duration, Instant},
+};
 
 use skill_workspace::{
     DuplicateCheckStatus, DuplicateDecisionKind, DuplicateFileDifferenceStatus, DuplicateFileKind,
@@ -406,6 +409,43 @@ fn personal_user_decisions_survive_rescan_and_can_be_restored_from_settings() {
             .expect("恢复重复检查结果");
     }
     assert_eq!(workspace.review_duplicate_groups().unwrap().groups.len(), 2);
+}
+
+#[test]
+fn thousand_instance_duplicate_review_stays_within_recorded_baseline() {
+    let sandbox = tempdir().expect("创建临时性能目录");
+    let root = sandbox.path().join(".codex/skills");
+    for index in 0..1_000 {
+        let unique_body_character = char::from_u32(0x4e00 + index).expect("生成稳定的唯一字符");
+        write_skill(
+            &root,
+            &format!("skill-{index:04}"),
+            &format!("skill-{index:04}"),
+            &format!("第 {index:04} 个本地 Skill。"),
+            &format!(
+                "# 性能夹具\n\n{}\n",
+                unique_body_character.to_string().repeat(120)
+            ),
+        );
+    }
+    let workspace =
+        SkillWorkspace::open(sandbox.path().join("index.sqlite3")).expect("打开性能工作区");
+    workspace.add_root(&root).expect("扫描一千个 Skill");
+
+    let started = Instant::now();
+    let review = workspace
+        .review_duplicate_groups()
+        .expect("生成千实例重复检查结果");
+    let elapsed = started.elapsed();
+    eprintln!("1000 个 Skill 的重复检查耗时 {elapsed:?}");
+    assert!(
+        review.groups.is_empty(),
+        "唯一夹具不应产生疑似重复、完全重复或同名冲突"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "千实例重复检查应在 5 秒内完成，实际为 {elapsed:?}"
+    );
 }
 
 fn write_skill(root: &std::path::Path, directory: &str, name: &str, description: &str, body: &str) {

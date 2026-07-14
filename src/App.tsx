@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { readableError } from "./errors";
 import type {
   DuplicateDecisionKind,
   DuplicateDecisionRecord,
@@ -261,6 +262,7 @@ const DEFAULT_VIEW_PREFERENCES: SkillWorkspaceViewPreferences = {
 };
 
 const EMPTY_ORGANIZATION: SkillOrganizationSnapshot = { groups: [], instances: [] };
+const LIST_RENDER_BATCH = 250;
 
 function SkillLibrary({
   gateway,
@@ -279,6 +281,9 @@ function SkillLibrary({
   const [preferences, setPreferences] = useState(DEFAULT_VIEW_PREFERENCES);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [instances, setInstances] = useState(snapshot.instances);
+  const [visibleInstanceCount, setVisibleInstanceCount] = useState(
+    Math.min(LIST_RENDER_BATCH, snapshot.instances.length),
+  );
   const [total, setTotal] = useState(snapshot.instances.length);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -323,6 +328,20 @@ function SkillLibrary({
     for (const tag of entry.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
     return counts;
   }, new Map<string, number>());
+
+  useEffect(() => {
+    setVisibleInstanceCount(Math.min(LIST_RENDER_BATCH, instances.length));
+  }, [instances]);
+
+  useEffect(() => {
+    if (visibleInstanceCount >= instances.length) return;
+    const timer = window.setTimeout(() => {
+      setVisibleInstanceCount((current) =>
+        Math.min(current + LIST_RENDER_BATCH, instances.length),
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [instances.length, visibleInstanceCount]);
 
   useEffect(() => {
     let active = true;
@@ -956,7 +975,7 @@ function SkillLibrary({
             </div>
             {instances.length ? (
               <ul className="skill-list" aria-label="本地 Skill">
-                {instances.map((skill) => (
+                {instances.slice(0, visibleInstanceCount).map((skill) => (
                   <SkillRow
                     key={skill.id}
                     skill={skill}
@@ -1709,8 +1728,4 @@ function ErrorBanner({ message }: { message: string }) {
       <span>{message}</span>
     </div>
   );
-}
-
-function readableError(reason: unknown) {
-  return reason instanceof Error ? reason.message : String(reason);
 }

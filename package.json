@@ -6,9 +6,14 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:app": "tauri build",
+    "check": "npm run check:local-only && npm run check:ui-contract && npm run typecheck && npm test && cargo test --workspace && cargo clippy --workspace --all-targets --all-features -- -D warnings && npm run build",
+    "check:local-only": "node scripts/verify-local-only.mjs",
+    "check:ui-contract": "node scripts/verify-ui-contract.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "smoke:macos": "node scripts/run-macos-smoke.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

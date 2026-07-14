@@ -7,13 +7,28 @@ use skill_workspace::{
     FileOperationPlan, FileOperationRecord, FileOperationRequest, SkillChangeOutcome,
     SkillChangePlan, SkillChangeRecord, SkillDetail, SkillDraft, SkillDraftValidation,
     SkillFilePreview, SkillOrganizationChange, SkillOrganizationSnapshot, SkillQuery,
-    SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences, WorkspaceSnapshot,
-    ZipImportRequest,
+    SkillSearchResult, SkillWorkspace, SkillWorkspaceViewPreferences, WorkspaceError,
+    WorkspaceSnapshot, ZipImportRequest,
 };
 use tauri::Manager;
 
+#[cfg(feature = "desktop-smoke")]
+mod desktop_smoke;
+
 struct AppState {
     workspace: SkillWorkspace,
+}
+
+async fn run_workspace_task<T>(
+    task: impl FnOnce() -> Result<T, WorkspaceError> + Send + 'static,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|_| "本地任务意外中断，请重试。".to_owned())?
+        .map_err(|error| error.user_message())
 }
 
 #[tauri::command]
@@ -25,25 +40,21 @@ fn workspace_snapshot(state: tauri::State<'_, AppState>) -> Result<WorkspaceSnap
 }
 
 #[tauri::command]
-fn authorize_skill_root(
+async fn authorize_skill_root(
     path: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, String> {
-    state
-        .workspace
-        .add_root(PathBuf::from(path))
-        .map_err(|error| error.to_string())
+    let workspace = state.workspace.clone();
+    run_workspace_task(move || workspace.add_root(PathBuf::from(path))).await
 }
 
 #[tauri::command]
-fn rescan_skill_root(
+async fn rescan_skill_root(
     root_id: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, String> {
-    state
-        .workspace
-        .rescan_root(root_id)
-        .map_err(|error| error.to_string())
+    let workspace = state.workspace.clone();
+    run_workspace_task(move || workspace.rescan_root(root_id)).await
 }
 
 #[tauri::command]
@@ -58,14 +69,12 @@ fn remove_skill_root(
 }
 
 #[tauri::command]
-fn search_skills(
+async fn search_skills(
     query: SkillQuery,
     state: tauri::State<'_, AppState>,
 ) -> Result<SkillSearchResult, String> {
-    state
-        .workspace
-        .search_skills(&query)
-        .map_err(|error| error.to_string())
+    let workspace = state.workspace.clone();
+    run_workspace_task(move || workspace.search_skills(&query)).await
 }
 
 #[tauri::command]
@@ -125,10 +134,11 @@ fn plan_skill_change(
     draft: SkillDraft,
     state: tauri::State<'_, AppState>,
 ) -> Result<SkillChangePlan, String> {
-    state
-        .workspace
-        .plan_skill_change(&draft)
-        .map_err(|error| error.to_string())
+    state.workspace.plan_skill_change(&draft).map_err(|error| {
+        #[cfg(feature = "desktop-smoke")]
+        eprintln!("macOS 桌面冒烟变化计划失败：{error:?}");
+        error.user_message()
+    })
 }
 
 #[tauri::command]
@@ -164,23 +174,21 @@ fn latest_undoable_skill_change(
 }
 
 #[tauri::command]
-fn review_duplicate_groups(state: tauri::State<'_, AppState>) -> Result<DuplicateReview, String> {
-    state
-        .workspace
-        .review_duplicate_groups()
-        .map_err(|error| error.to_string())
+async fn review_duplicate_groups(
+    state: tauri::State<'_, AppState>,
+) -> Result<DuplicateReview, String> {
+    let workspace = state.workspace.clone();
+    run_workspace_task(move || workspace.review_duplicate_groups()).await
 }
 
 #[tauri::command]
-fn save_duplicate_decision(
+async fn save_duplicate_decision(
     instance_ids: Vec<String>,
     kind: DuplicateDecisionKind,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    state
-        .workspace
-        .save_duplicate_decision(&instance_ids, kind)
-        .map_err(|error| error.to_string())
+    let workspace = state.workspace.clone();
+    run_workspace_task(move || workspace.save_duplicate_decision(&instance_ids, kind)).await
 }
 
 #[tauri::command]
@@ -194,14 +202,12 @@ fn duplicate_decisions(
 }
 
 #[tauri::command]
-fn restore_duplicate_decision(
+async fn restore_duplicate_decision(
     decision_id: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    state
-        .workspace
-        .restore_duplicate_decision(decision_id)
-        .map_err(|error| error.to_string())
+    let workspace = state.workspace.clone();
+    run_workspace_task(move || workspace.restore_duplicate_decision(decision_id)).await
 }
 
 #[tauri::command]
@@ -360,13 +366,21 @@ fn undo_file_operation_batch(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&app_data_dir)?;
-            let workspace = SkillWorkspace::open(app_data_dir.join("skill-management.sqlite3"))
+            #[cfg(not(feature = "desktop-smoke"))]
+            let database_path = {
+                let app_data_dir = app.path().app_data_dir()?;
+                std::fs::create_dir_all(&app_data_dir)?;
+                app_data_dir.join("skill-management.sqlite3")
+            };
+            #[cfg(feature = "desktop-smoke")]
+            let database_path = desktop_smoke::database_path()?;
+            let workspace = SkillWorkspace::open(database_path)
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
+            #[cfg(feature = "desktop-smoke")]
+            desktop_smoke::monitor(app.handle().clone(), workspace.clone());
             app.manage(AppState { workspace });
             Ok(())
         })
@@ -403,7 +417,24 @@ pub fn run() {
             file_operation_history,
             latest_undoable_file_operation,
             undo_file_operation_batch
-        ])
+        ]);
+    #[cfg(feature = "desktop-smoke")]
+    let builder = {
+        let smoke_script = desktop_smoke::script();
+        builder.on_page_load(move |webview, payload| {
+            eprintln!(
+                "macOS 桌面冒烟页面事件：{:?} {}",
+                payload.event(),
+                payload.url()
+            );
+            if payload.event() == tauri::webview::PageLoadEvent::Finished
+                && let Err(error) = webview.eval(&smoke_script)
+            {
+                eprintln!("macOS 桌面冒烟脚本注入失败：{error}");
+            }
+        })
+    };
+    builder
         .run(tauri::generate_context!())
         .expect("启动 Skill 管理器失败");
 }
